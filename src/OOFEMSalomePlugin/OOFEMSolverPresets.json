@@ -1,0 +1,31 @@
+{
+  "solver_presets": [
+    {
+      "id": "linear-static-vtk",
+      "display_name": "Linear static + VTK",
+      "description": "One-step linear structural solve with displacement and stress VTK output.",
+      "engng_model": "StaticStructural",
+      "nsteps": 1,
+      "vtk": true,
+      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1"
+    },
+    {
+      "id": "linear-static-text",
+      "display_name": "Linear static (text only)",
+      "description": "One-step linear structural solve producing only the standard OOFEM output.",
+      "engng_model": "StaticStructural",
+      "nsteps": 1,
+      "vtk": false
+    },
+    {
+      "id": "large-strain-static-vtk",
+      "display_name": "Large-strain static + VTK (nlgeo)",
+      "description": "Geometrically nonlinear structural solve (element nlgeo flag set) for hyperelastic or large-displacement materials, with displacement and stress VTK output.",
+      "engng_model": "StaticStructural",
+      "nsteps": 10,
+      "vtk": true,
+      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
+      "nlgeom": true
+    }
+  ]
+}

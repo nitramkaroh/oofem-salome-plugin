@@ -1,32 +1,30 @@
 {
   "boundary_conditions": [
-     {
-      "oofem_name": "BoundaryCondition",
-      "display_name": "Dirichlet BC (Prescribed DOF)",
-      "apply_to": "nodes",
-      "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (D_u(1), D_v(2), D_w(3)=y)."},
-        {"key": "Values", "name": "Values", "type": "floatarray", "default": "", "description": "Prescribed DOF values."}
-      ]
-    },
     {
       "oofem_name": "NodalLoad",
-      "display_name": "Nodal Load/Flux",
+      "display_name": "Nodal Load",
       "apply_to": "nodes",
       "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (1=x, 2=y, 3=z)."},
-        {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Nodal Load/Flux DOF values."}
+        {"key": "dof", "name": "DOF", "type": "int", "default": 1, "description": "Degree of freedom (1=x, 2=y, 3=z)."},
+        {"key": "val", "name": "Value", "type": "float", "default": 0.0, "description": "Load value."}
       ]
     },
     {
-      "oofem_name": "ConstantEdgeLoad",
-      "display_name": "Constant Edge Load (on Element Boundary)",
-      "apply_to": "elementedges",
+      "oofem_name": "Displacement",
+      "display_name": "Nodal Displacement",
+      "apply_to": "nodes",
       "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (D_u(1), D_v(2), D_w(3)=y)."},
-        {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Load components in the specified DOFs."},
-        {"key": "loadtype", "name": "LoadType", "type": "int", "default": "3", "description": "Type of load (e.g., pressure, traction)."},
-        {"key": "csType", "name": "cstype", "type": "int", "default": 0, "description": "The load can be defined in global coordinate system (csType = 0, default) or in entity - specific local coordinate system (csType = 1)."}
+        {"key": "dof", "name": "DOF", "type": "int", "default": 1, "description": "Degree of freedom (1=x, 2=y, 3=z)."},
+        {"key": "val", "name": "Value", "type": "float", "default": 0.0, "description": "Prescribed displacement value."}
+      ]
+    },
+    {
+      "oofem_name": "SurfaceLoad",
+      "display_name": "Surface Load (on Element Boundary)",
+      "apply_to": "element_boundary",
+      "params": [
+        {"key": "dof", "name": "DOF", "type": "int", "default": 3, "description": "Direction of load (1=x, 2=y, 3=z)."},
+        {"key": "val", "name": "Value", "type": "float", "default": -1000.0, "description": "Load value (e.g., pressure). Positive is tension, negative is pressure."}
       ]
     }
   ]

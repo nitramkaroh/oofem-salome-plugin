@@ -3,6 +3,9 @@
 DEFAULT_ELEMENT_MAP = {
     "Segment": "Truss3D",
     "Triangle": "TrPlaneStress2d",
-    "Quadrangle": "QuadPlaneStress2d",
-    "Tetrahedron": "Tet3d",
+    "Quadrangle": "PlaneStress2d",
+    "Quadrangle8": "QPlaneStrain",
+    "Tetrahedron": "LTRSpace",
+    "Hexahedron": "LSpace",
+    "Hexahedron20": "QSpace",
 }

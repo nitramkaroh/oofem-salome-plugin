@@ -1,18 +1,22 @@
-# src/OOFEMSalomePlugin/OOFEMBCDialog.py
+from OOFEMSalomePlugin.OOFEMQt import QtWidgets
 
-from PyQt5 import QtWidgets
 
 class OOFEMBCDialog(QtWidgets.QDialog):
-    """
-    A dialog for creating and editing a boundary condition instance.
-    """
-    def __init__(self, bc_templates, mesh_groups, time_function_map, existing_bc=None, parent=None):
+    """Create a BC and offer only compatible node or boundary groups."""
+
+    def __init__(self, bc_templates, mesh_groups, existing_bc=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Boundary Condition Definition")
-
         self.bc_templates = bc_templates
-        self.mesh_groups = mesh_groups
-        self.time_function_map = time_function_map
+        if isinstance(mesh_groups, dict):
+            self.mesh_groups = mesh_groups
+        else:
+            groups = list(mesh_groups)
+            self.mesh_groups = {
+                "nodes": groups,
+                "boundaries": groups,
+                "elements": groups,
+            }
 
         layout = QtWidgets.QVBoxLayout(self)
         form_layout = QtWidgets.QFormLayout()
@@ -21,62 +25,71 @@ class OOFEMBCDialog(QtWidgets.QDialog):
         self.nameEdit = QtWidgets.QLineEdit()
         self.typeCombo = QtWidgets.QComboBox()
         self.groupCombo = QtWidgets.QComboBox()
-        self.tfCombo = QtWidgets.QComboBox()
-
         form_layout.addRow("Instance Name:", self.nameEdit)
         form_layout.addRow("OOFEM BC Type:", self.typeCombo)
-        form_layout.addRow("Assign to Mesh Group:", self.groupCombo)
-        form_layout.addRow("Time Function:", self.tfCombo)
+        form_layout.addRow("Assign to Compatible Group:", self.groupCombo)
 
-        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        self.typeCombo.addItems([t['display_name'] for t in self.bc_templates])
-        self.groupCombo.addItems(self.mesh_groups)
+        self.typeCombo.addItems(
+            [template["display_name"] for template in self.bc_templates]
+        )
+        self.typeCombo.currentIndexChanged.connect(self._populate_groups)
 
-        # Populate time function dropdown
-        for tf in self.time_function_map:
-            self.tfCombo.addItem(tf.get('name', 'Unnamed'), tf.get('id'))
-
+        selected_group = None
         if existing_bc:
             self.nameEdit.setText(existing_bc.get("name", ""))
-            
+            selected_group = existing_bc.get("assigned_group")
             oofem_type = existing_bc.get("oofem_type")
-            type_index = next((i for i, t in enumerate(self.bc_templates) if t['oofem_name'] == oofem_type), -1)
-            if type_index != -1:
+            type_index = next(
+                (
+                    index
+                    for index, template in enumerate(self.bc_templates)
+                    if template["oofem_name"] == oofem_type
+                ),
+                -1,
+            )
+            if type_index >= 0:
                 self.typeCombo.setCurrentIndex(type_index)
 
-            group_name = existing_bc.get("assigned_group", "")
-            group_index = self.groupCombo.findText(group_name)
-            if group_index != -1:
-                self.groupCombo.setCurrentIndex(group_index)
-            
-            tf_id = existing_bc.get("time_function_id")
-            tf_index = self.tfCombo.findData(tf_id)
-            if tf_index != -1:
-                self.tfCombo.setCurrentIndex(tf_index)
+        self._populate_groups(selected=selected_group)
+
+    def _target_groups(self):
+        if not self.bc_templates:
+            return []
+        template = self.bc_templates[self.typeCombo.currentIndex()]
+        if template.get("apply_to") == "nodes":
+            return self.mesh_groups.get("nodes", [])
+        if template.get("apply_to") == "element_boundary":
+            return self.mesh_groups.get("boundaries", [])
+        return self.mesh_groups.get("elements", [])
+
+    def _populate_groups(self, index=None, selected=None):
+        if selected is None:
+            selected = self.groupCombo.currentText()
+        self.groupCombo.clear()
+        self.groupCombo.addItems(["<None>"] + list(self._target_groups()))
+        selected_index = self.groupCombo.findText(selected)
+        if selected_index >= 0:
+            self.groupCombo.setCurrentIndex(selected_index)
 
     def get_data(self):
-        """Returns the configured BC data as a dictionary."""
         selected_template = self.bc_templates[self.typeCombo.currentIndex()]
-
+        group_name = self.groupCombo.currentText()
         return {
-            "name": self.nameEdit.text(),
-            "oofem_type": selected_template['oofem_name'],
-            "assigned_group": self.groupCombo.currentText(),
-            "time_function_id": self.tfCombo.currentData(),
+            "name": self.nameEdit.text().strip(),
+            "oofem_type": selected_template["oofem_name"],
+            "assigned_group": group_name if group_name != "<None>" else None,
         }
 
     @staticmethod
-    def run(bc_templates, mesh_groups, time_function_map, existing_bc=None, parent=None):
-        """Static method to create, run, and return data from the dialog."""
-        if not time_function_map:
-            QtWidgets.QMessageBox.warning(parent, "No Time Functions", "You must define at least one time function before creating a boundary condition.")
-            return None
-        dialog = OOFEMBCDialog(bc_templates, mesh_groups, time_function_map, existing_bc, parent)
-        result = dialog.exec_()
-        if result == QtWidgets.QDialog.Accepted:
+    def run(bc_templates, mesh_groups, existing_bc=None, parent=None):
+        dialog = OOFEMBCDialog(bc_templates, mesh_groups, existing_bc, parent)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
             return dialog.get_data()
         return None

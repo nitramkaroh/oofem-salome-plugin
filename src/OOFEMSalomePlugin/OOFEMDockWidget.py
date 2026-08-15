@@ -1,14 +1,14 @@
-# src/OOFEMSalomePlugin/OOFEMDockWidget.py
-
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
+from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
 from OOFEMSalomePlugin.OOFEMMainWidget import OOFEMMainWidget
 
-class OOFEMDockWidget(QtWidgets.QDockWidget):
-    def __init__(self):
-        super().__init__("OOFEM Plugin")
-        self.setAllowedAreas(Qt.LeftDockWidgetArea |
-                             Qt.RightDockWidgetArea)
 
-        self.mainWidget = OOFEMMainWidget()
+class OOFEMDockWidget(QtWidgets.QDockWidget):
+    OBJECT_NAME = "OOFEMSalomePluginDock"
+
+    def __init__(self, parent=None):
+        super().__init__("OOFEM", parent)
+        self.setObjectName(self.OBJECT_NAME)
+        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+
+        self.mainWidget = OOFEMMainWidget(self)
         self.setWidget(self.mainWidget)

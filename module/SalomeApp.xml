@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document>
+  <!-- Bootstrap module discovery in a standalone SALOME installation. -->
+  <section name="launch">
+    <parameter name="modules" value="OOFEM"/>
+  </section>
+  <section name="OOFEM">
+    <parameter name="name" value="OOFEM"/>
+    <parameter name="icon" value="oofem.png"/>
+    <parameter name="library" value="SalomePyQtGUILight"/>
+    <parameter name="version" value="1.0"/>
+  </section>
+  <section name="resources">
+    <parameter name="OOFEM" value="%OOFEM_ROOT_DIR%/share/salome/resources/oofem"/>
+  </section>
+</document>

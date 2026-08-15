@@ -1,33 +1,27 @@
-# src/OOFEMSalomePlugin/OOFEMMainWidget.py
-
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
-import json
 import os
 import uuid
 import traceback
 
-from OOFEMSalomePlugin.OOFEMState import OOFEMState
+from OOFEMSalomePlugin.OOFEMQt import Qt, QtCore, QtWidgets
 from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
-from OOFEMSalomePlugin.OOFEMCrossSectionDialog import OOFEMCrossSectionDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
-from OOFEMSalomePlugin.OOFEMTimeFunctionDialog import OOFEMTimeFunctionDialog
 
 
 class OOFEMMainWidget(QtWidgets.QWidget):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
         # Defer study and state loading until populateAll() is called.
         self.study = None
         self.state = {}
         self.material_templates = []
-        self.analysis_templates = []
-        self.cs_templates = []
-        self.tf_templates = []
+        self.material_library = []
         self.bc_templates = []
+        self.solver_presets = []
         self._block_signals = False
+        self.solverProcess = None
+        self.last_export_file = ""
 
         layout = QtWidgets.QVBoxLayout()
 
@@ -36,39 +30,26 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.refreshBtn = QtWidgets.QPushButton("🔄 Load/Refresh Data from Study")
         self.refreshBtn.clicked.connect(self.populateAll)
         top_layout.addWidget(self.refreshBtn)
+        self.logBtn = QtWidgets.QPushButton("Show Log")
+        self.logBtn.clicked.connect(self.showLog)
+        top_layout.addWidget(self.logBtn)
         layout.addLayout(top_layout)
+
+        self.statusLabel = QtWidgets.QLabel("Open or create a study to begin.")
+        self.statusLabel.setWordWrap(True)
+        layout.addWidget(self.statusLabel)
 
         # Mesh selector
         layout.addWidget(QtWidgets.QLabel("Select Mesh:"))
         self.meshCombo = QtWidgets.QComboBox()
+        self.meshCombo.currentIndexChanged.connect(self.onMeshChanged)
         layout.addWidget(self.meshCombo)
 
         # --- Tabbed interface for different settings ---
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs)
 
-        # Tab 1: Analysis
-        analysis_tab = QtWidgets.QWidget()
-        analysis_layout = QtWidgets.QVBoxLayout(analysis_tab)
-        analysis_form_layout = QtWidgets.QFormLayout()
-        self.analysisTypeCombo = QtWidgets.QComboBox()
-        self.analysisTypeCombo.currentIndexChanged.connect(self.onAnalysisTypeChanged)
-        analysis_form_layout.addRow("Analysis Type:", self.analysisTypeCombo)
-        analysis_layout.addLayout(analysis_form_layout)
-
-        analysis_props_group = QtWidgets.QGroupBox("Analysis Parameters")
-        analysis_props_layout = QtWidgets.QVBoxLayout(analysis_props_group)
-        self.analysisPropsTable = QtWidgets.QTableWidget()
-        self.analysisPropsTable.setColumnCount(2)
-        self.analysisPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
-        self.analysisPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        self.analysisPropsTable.cellChanged.connect(self.onAnalysisPropertyChanged)
-        analysis_props_layout.addWidget(self.analysisPropsTable)
-        analysis_layout.addWidget(analysis_props_group)
-        analysis_layout.addStretch()
-        self.tabs.addTab(analysis_tab, "Analysis")
-
-        # Tab 2: Element Mapping
+        # Tab 1: Element Mapping
         elem_tab = QtWidgets.QWidget()
         elem_layout = QtWidgets.QVBoxLayout(elem_tab)
         self.elemTable = QtWidgets.QTableWidget()
@@ -77,28 +58,24 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         elem_layout.addWidget(self.elemTable)
         self.tabs.addTab(elem_tab, "Element Mapping")
 
-        # Tab 3: Materials
+        # Tab 2: Materials
         mat_tab = QtWidgets.QWidget()
         mat_layout = QtWidgets.QVBoxLayout(mat_tab)
         
         # Buttons for adding/removing materials
         mat_btn_layout = QtWidgets.QHBoxLayout()
-        self.addMatBtn = QtWidgets.QPushButton("Add")
+        self.addMatBtn = QtWidgets.QPushButton("Add Material")
         self.addMatBtn.clicked.connect(self.addMaterial)
-        self.editMatBtn = QtWidgets.QPushButton("Edit")
-        self.editMatBtn.clicked.connect(self.editMaterial)
-        self.removeMatBtn = QtWidgets.QPushButton("Remove")
+        self.removeMatBtn = QtWidgets.QPushButton("Remove Material")
         self.removeMatBtn.clicked.connect(self.removeMaterial)
         mat_btn_layout.addWidget(self.addMatBtn)
-        mat_btn_layout.addWidget(self.editMatBtn)
         mat_btn_layout.addWidget(self.removeMatBtn)
-        mat_btn_layout.addStretch()
         mat_layout.addLayout(mat_btn_layout)
 
         # Table of defined materials
         self.matTable = QtWidgets.QTableWidget()
-        self.matTable.setColumnCount(2)
-        self.matTable.setHorizontalHeaderLabels(["Name", "OOFEM Type"])
+        self.matTable.setColumnCount(3)
+        self.matTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group"])
         self.matTable.itemSelectionChanged.connect(self.populateMaterialDetails)
         self.matTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.matTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -119,100 +96,22 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         mat_layout.addStretch()
         self.tabs.addTab(mat_tab, "Materials")
 
-        # Tab 4: Cross Sections
-        cs_tab = QtWidgets.QWidget()
-        cs_layout = QtWidgets.QVBoxLayout(cs_tab)
-
-        cs_btn_layout = QtWidgets.QHBoxLayout()
-        self.addCSBtn = QtWidgets.QPushButton("Add")
-        self.addCSBtn.clicked.connect(self.addCrossSection)
-        self.editCSBtn = QtWidgets.QPushButton("Edit")
-        self.editCSBtn.clicked.connect(self.editCrossSection)
-        self.removeCSBtn = QtWidgets.QPushButton("Remove")
-        self.removeCSBtn.clicked.connect(self.removeCrossSection)
-        cs_btn_layout.addWidget(self.addCSBtn)
-        cs_btn_layout.addWidget(self.editCSBtn)
-        cs_btn_layout.addWidget(self.removeCSBtn)
-        cs_btn_layout.addStretch()
-        cs_layout.addLayout(cs_btn_layout)
-
-        self.csTable = QtWidgets.QTableWidget()
-        self.csTable.setColumnCount(4)
-        self.csTable.setHorizontalHeaderLabels(["Name", "Type", "Material", "Assigned Group"])
-        self.csTable.itemSelectionChanged.connect(self.populateCrossSectionDetails)
-        self.csTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.csTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        cs_layout.addWidget(self.csTable)
-
-        cs_props_group = QtWidgets.QGroupBox("Cross Section Properties (select a section above)")
-        cs_props_layout = QtWidgets.QVBoxLayout(cs_props_group)
-        self.csPropsTable = QtWidgets.QTableWidget()
-        self.csPropsTable.setColumnCount(2)
-        self.csPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
-        self.csPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        self.csPropsTable.cellChanged.connect(self.onCrossSectionPropertyChanged)
-        cs_props_layout.addWidget(self.csPropsTable)
-        cs_layout.addWidget(cs_props_group)
-
-        cs_layout.addStretch()
-        self.tabs.insertTab(3, cs_tab, "Cross Sections") # Insert before BCs
-
-        # Tab 5: Time Functions
-        tf_tab = QtWidgets.QWidget()
-        tf_layout = QtWidgets.QVBoxLayout(tf_tab)
-
-        tf_btn_layout = QtWidgets.QHBoxLayout()
-        self.addTFBtn = QtWidgets.QPushButton("Add")
-        self.addTFBtn.clicked.connect(self.addTimeFunction)
-        self.editTFBtn = QtWidgets.QPushButton("Edit")
-        self.editTFBtn.clicked.connect(self.editTimeFunction)
-        self.removeTFBtn = QtWidgets.QPushButton("Remove")
-        self.removeTFBtn.clicked.connect(self.removeTimeFunction)
-        tf_btn_layout.addWidget(self.addTFBtn)
-        tf_btn_layout.addWidget(self.editTFBtn)
-        tf_btn_layout.addWidget(self.removeTFBtn)
-        tf_btn_layout.addStretch()
-        tf_layout.addLayout(tf_btn_layout)
-
-        self.tfTable = QtWidgets.QTableWidget()
-        self.tfTable.setColumnCount(2)
-        self.tfTable.setHorizontalHeaderLabels(["Name", "Type"])
-        self.tfTable.itemSelectionChanged.connect(self.populateTimeFunctionDetails)
-        self.tfTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.tfTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        tf_layout.addWidget(self.tfTable)
-
-        tf_props_group = QtWidgets.QGroupBox("Time Function Properties (select a function above)")
-        tf_props_layout = QtWidgets.QVBoxLayout(tf_props_group)
-        self.tfPropsTable = QtWidgets.QTableWidget()
-        self.tfPropsTable.setColumnCount(2)
-        self.tfPropsTable.setHorizontalHeaderLabels(["Parameter", "Value"])
-        self.tfPropsTable.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        self.tfPropsTable.cellChanged.connect(self.onTimeFunctionPropertyChanged)
-        tf_props_layout.addWidget(self.tfPropsTable)
-        tf_layout.addWidget(tf_props_group)
-        self.tabs.insertTab(4, tf_tab, "Time Functions")
-
-        # Tab 4: Boundary Conditions
+        # Tab 3: Boundary Conditions
         bc_tab = QtWidgets.QWidget()
         bc_layout = QtWidgets.QVBoxLayout(bc_tab)
 
         bc_btn_layout = QtWidgets.QHBoxLayout()
-        self.addBCBtn = QtWidgets.QPushButton("Add")
+        self.addBCBtn = QtWidgets.QPushButton("Add Boundary Condition")
         self.addBCBtn.clicked.connect(self.addBC)
-        self.editBCBtn = QtWidgets.QPushButton("Edit")
-        self.editBCBtn.clicked.connect(self.editBC)
-        self.removeBCBtn = QtWidgets.QPushButton("Remove")
+        self.removeBCBtn = QtWidgets.QPushButton("Remove Boundary Condition")
         self.removeBCBtn.clicked.connect(self.removeBC)
         bc_btn_layout.addWidget(self.addBCBtn)
-        bc_btn_layout.addWidget(self.editBCBtn)
         bc_btn_layout.addWidget(self.removeBCBtn)
-        bc_btn_layout.addStretch()
         bc_layout.addLayout(bc_btn_layout)
 
         self.bcTable = QtWidgets.QTableWidget()
-        self.bcTable.setColumnCount(4)
-        self.bcTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group", "Time Function"])
+        self.bcTable.setColumnCount(3)
+        self.bcTable.setHorizontalHeaderLabels(["Name", "OOFEM Type", "Assigned Group"])
         self.bcTable.itemSelectionChanged.connect(self.populateBCDetails)
         self.bcTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.bcTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -231,253 +130,306 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         bc_layout.addStretch()
         self.tabs.addTab(bc_tab, "Boundary Conditions")
 
+        # Tab 4: validated export and non-blocking solver execution
+        export_tab = QtWidgets.QWidget()
+        export_layout = QtWidgets.QVBoxLayout(export_tab)
+        export_form = QtWidgets.QFormLayout()
+        self.solverPresetCombo = QtWidgets.QComboBox()
+        self.solverPresetCombo.currentIndexChanged.connect(self._solverSettingsChanged)
+        export_form.addRow("Solver preset:", self.solverPresetCombo)
+
+        executable_layout = QtWidgets.QHBoxLayout()
+        self.oofemExecutableEdit = QtWidgets.QLineEdit()
+        self.oofemExecutableEdit.setPlaceholderText(
+            "OOFEM executable (or set OOFEM_BIN)"
+        )
+        self.oofemExecutableEdit.editingFinished.connect(self._solverSettingsChanged)
+        executable_layout.addWidget(self.oofemExecutableEdit)
+        self.browseExecutableBtn = QtWidgets.QPushButton("Browse…")
+        self.browseExecutableBtn.clicked.connect(self.browseOOFEMExecutable)
+        executable_layout.addWidget(self.browseExecutableBtn)
+        export_form.addRow("OOFEM executable:", executable_layout)
+
+        input_layout = QtWidgets.QHBoxLayout()
+        self.inputFileEdit = QtWidgets.QLineEdit()
+        self.inputFileEdit.setPlaceholderText("Output .in file")
+        self.inputFileEdit.editingFinished.connect(self._solverSettingsChanged)
+        input_layout.addWidget(self.inputFileEdit)
+        self.browseInputBtn = QtWidgets.QPushButton("Browse…")
+        self.browseInputBtn.clicked.connect(self.browseInputFile)
+        input_layout.addWidget(self.browseInputBtn)
+        export_form.addRow("Input file:", input_layout)
+        export_layout.addLayout(export_form)
+
+        export_buttons = QtWidgets.QHBoxLayout()
+        self.validateBtn = QtWidgets.QPushButton("Validate")
+        self.validateBtn.clicked.connect(self.validateModel)
+        export_buttons.addWidget(self.validateBtn)
+        self.exportBtn = QtWidgets.QPushButton("Generate Input")
+        self.exportBtn.clicked.connect(self.export)
+        export_buttons.addWidget(self.exportBtn)
+        self.runBtn = QtWidgets.QPushButton("Generate && Run")
+        self.runBtn.clicked.connect(self.runSolver)
+        export_buttons.addWidget(self.runBtn)
+        export_layout.addLayout(export_buttons)
+
+        self.exportSummaryLabel = QtWidgets.QLabel(
+            "Validate the group assignments before generating the model."
+        )
+        self.exportSummaryLabel.setWordWrap(True)
+        export_layout.addWidget(self.exportSummaryLabel)
+        export_layout.addWidget(QtWidgets.QLabel("Solver output:"))
+        self.solverLog = QtWidgets.QPlainTextEdit()
+        self.solverLog.setReadOnly(True)
+        export_layout.addWidget(self.solverLog)
+        self.tabs.addTab(export_tab, "Export / Solve")
+
+        # Tab 5: discover and open native OOFEM VTK output.
+        post_tab = QtWidgets.QWidget()
+        post_layout = QtWidgets.QVBoxLayout(post_tab)
+        post_layout.addWidget(QtWidgets.QLabel("Result files for the current input:"))
+        self.resultList = QtWidgets.QListWidget()
+        post_layout.addWidget(self.resultList)
+        post_buttons = QtWidgets.QHBoxLayout()
+        self.refreshResultsBtn = QtWidgets.QPushButton("Refresh Results")
+        self.refreshResultsBtn.clicked.connect(self.refreshResults)
+        post_buttons.addWidget(self.refreshResultsBtn)
+        self.openParaVisBtn = QtWidgets.QPushButton("Open in ParaVis")
+        self.openParaVisBtn.clicked.connect(self.openSelectedResult)
+        post_buttons.addWidget(self.openParaVisBtn)
+        self.convertMedBtn = QtWidgets.QPushButton("Convert VTK to MED…")
+        self.convertMedBtn.clicked.connect(self.convertSelectedResult)
+        post_buttons.addWidget(self.convertMedBtn)
+        post_layout.addLayout(post_buttons)
+        post_note = QtWidgets.QLabel(
+            "OOFEM writes VTK/PVD natively. MED conversion uses the optional "
+            "meshio package bundled with or installed into SALOME's Python."
+        )
+        post_note.setWordWrap(True)
+        post_layout.addWidget(post_note)
+        self.tabs.addTab(post_tab, "Postprocess")
 
         # --- Bottom buttons ---
         bottom_layout = QtWidgets.QHBoxLayout()
-        self.saveBtn = QtWidgets.QPushButton("💾 Save All to Study")
+        self.saveBtn = QtWidgets.QPushButton("💾 Commit OOFEM Settings")
         self.saveBtn.clicked.connect(self.saveState)
         bottom_layout.addWidget(self.saveBtn)
 
-        # Export button
-        self.exportBtn = QtWidgets.QPushButton("🚀 Generate OOFEM Input")
-        self.exportBtn.clicked.connect(self.export)
-        bottom_layout.addWidget(self.exportBtn)
         layout.addLayout(bottom_layout)
 
         self.setLayout(layout)
-
-    def _format_param_value(self, value):
-        """Formats a parameter value for display in the UI."""
-        if isinstance(value, list):
-            return " ".join(map(str, value))
-        return str(value)
-
-    def _parse_param_value(self, value_text, param_type):
-        """Parses a string value from a property table into the correct Python type."""
-        value_text = value_text.strip()
-
-        if param_type == 'float':
-            return float(value_text)
-        elif param_type == 'int':
-            return int(value_text)
-        elif param_type == 'string':
-            return str(value_text)
-        elif param_type == 'intarray':
-            # Handles space or comma separated values
-            if not value_text: return []
-            return [int(v) for v in value_text.replace(',', ' ').split()]
-        elif param_type == 'floatarray':
-            # Handles space or comma separated values
-            if not value_text: return []
-            return [float(v) for v in value_text.replace(',', ' ').split()]
-        else:
-            # Default to string if type is unknown
-            return str(value_text)
-
-    def loadAnalysisTemplates(self):
-        """Loads analysis definitions from the JSON file."""
-        try:
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            json_path = os.path.join(plugin_dir, "OOFEMAnalyses.json")
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                self.analysis_templates = data.get("analyses", [])
-        except Exception as e:
-            print(f"Error loading analysis templates: {e}")
-            self.analysis_templates = []
+        self.loadMaterialTemplates()
+        self.loadBCTemplates()
+        self.loadSolverPresets()
 
     def loadMaterialTemplates(self):
-        """Loads material definitions from the JSON file."""
+        """Load the material templates and named material library."""
         try:
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            json_path = os.path.join(plugin_dir, "OOFEMMaterials.json")
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                self.material_templates = data.get("materials", [])
-        except Exception as e:
-            print(f"Error loading material templates: {e}")
+            from OOFEMSalomePlugin.OOFEMConfig import load_material_catalog
+
+            self.material_templates, self.material_library = load_material_catalog()
+        except Exception as error:
+            print("Error loading material templates: {}".format(error))
             self.material_templates = []
-
-    def loadCrossSectionTemplates(self):
-        """Loads cross section definitions from the JSON file."""
-        try:
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            json_path = os.path.join(plugin_dir, "OOFEMCrossSections.json")
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                self.cs_templates = data.get("cross_sections", [])
-        except Exception as e:
-            print(f"Error loading cross section templates: {e}")
-            self.cs_templates = []
-
-    def loadTimeFunctionTemplates(self):
-        """Loads time function definitions from the JSON file."""
-        try:
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            json_path = os.path.join(plugin_dir, "OOFEMTimeFunctions.json")
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                self.tf_templates = data.get("time_functions", [])
-        except Exception as e:
-            print(f"Error loading time function templates: {e}")
-            self.tf_templates = []
+            self.material_library = []
 
     def loadBCTemplates(self):
         """Loads boundary condition definitions from the JSON file."""
         try:
-            plugin_dir = os.path.dirname(os.path.abspath(__file__))
-            json_path = os.path.join(plugin_dir, "OOFEMBCs.json")
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                self.bc_templates = data.get("boundary_conditions", [])
-        except Exception as e:
-            print(f"Error loading BC templates: {e}")
+            from OOFEMSalomePlugin.OOFEMConfig import (
+                load_boundary_condition_templates,
+            )
+
+            self.bc_templates = load_boundary_condition_templates()
+        except Exception as error:
+            print("Error loading BC templates: {}".format(error))
             self.bc_templates = []
-    def populateAll(self):
-        # Load state and populate UI. Called from the refresh button.
 
-        # Your suggestion to call salome.salome_init() is correct. This function is
-        # needed to establish the connection between the Python script and the running
-        # Salome application core. This patch cleans up all previous attempts and
-        # implements this correct initialization sequence.
-        current_study = None
+    def loadSolverPresets(self):
         try:
-            import salome
-            salome.salome_init()
-            current_study = salome.myStudy
-        except Exception as e:
-            # This will fail if no study is active or if the connection fails.
-            pass
+            from OOFEMSalomePlugin.OOFEMConfig import load_solver_presets
 
-        if not current_study:
-            QtWidgets.QMessageBox.warning(self, "Study Not Found",
-                                          "Could not find an active study.\n\n"
-                                          "Please open or create a study before refreshing the plugin.")
-            return
+            self.solver_presets = load_solver_presets()
+            self.solverPresetCombo.clear()
+            for preset in self.solver_presets:
+                self.solverPresetCombo.addItem(
+                    preset.get("display_name", preset["id"]), preset["id"]
+                )
+        except Exception as error:
+            print("Error loading solver presets: {}".format(error))
+            self.solver_presets = []
 
-        # Check if the SMESH component is active.
-        smesh_comp = current_study.FindComponent("SMESH")
-        if not smesh_comp:
-            # Automatic activation can cause crashes in Salome 9.15.
-            # We will just check for the module and ask the user to activate it if missing.
-            comp_user_name = "Mesh" # Default user-facing name
+    def showLog(self):
+        from OOFEMSalomePlugin.OOFEMModule import getModule
+
+        getModule().showDebugConsole()
+
+    def populateAll(self, checked=False, study=None, state=None):
+        """Load the active study and rebuild all controls."""
+        current_study = study
+        if current_study is None:
             try:
-                # getComponentUserName provides the localized name (e.g., "Maillage" in French)
-                comp_user_name = salome.sg.getComponentUserName("SMESH")
-            except Exception:
-                pass # Use default name on failure
+                import salome
 
-            # Inform the user that the module needs to be activated manually.
-            QtWidgets.QMessageBox.warning(self, f"{comp_user_name} Module Not Active",
-                                          f"The {comp_user_name} module is not active.\n\n"
-                                          f"Please activate the '{comp_user_name}' module manually from the dropdown menu, then click Refresh.")
+                current_study = getattr(salome, "myStudy", None)
+                if current_study is None:
+                    salome.salome_init()
+                    current_study = salome.myStudy
+            except Exception:
+                current_study = None
+
+        if current_study is None:
+            self.statusLabel.setText(
+                "No active SALOME study. Open or create one, then refresh."
+            )
             return
 
-        # Now that we know the study and SMESH component are valid, assign it to the instance
         self.study = current_study
-        self.state = OOFEMState.load(self.study)
-        if "element_mapping" not in self.state:
-            self.state["element_mapping"] = DEFAULT_ELEMENT_MAP.copy()
-        if "materials" not in self.state:
-            self.state["materials"] = []
-        if "cross_sections" not in self.state:
-            self.state["cross_sections"] = []
-        if "time_functions" not in self.state:
-            self.state["time_functions"] = []
-        if "analysis" not in self.state:
-            # Set a default analysis if none is defined
-            self.state["analysis"] = {
-                "oofem_type": "StaticStructural",
-                "params": {"nsteps": 1}
-            }
-        if "bcs" not in self.state:
-            self.state["bcs"] = []
+        if isinstance(state, dict):
+            self.state = state
+        elif not isinstance(self.state, dict):
+            self.state = {}
+        self.state.setdefault("element_mapping", {})
+        for salome_type, oofem_type in DEFAULT_ELEMENT_MAP.items():
+            self.state["element_mapping"].setdefault(salome_type, oofem_type)
+        self.state.setdefault("materials", [])
+        self.state.setdefault("bcs", [])
+        self.state.setdefault(
+            "solver_preset",
+            self.solverPresetCombo.itemData(0) if self.solverPresetCombo.count() else None,
+        )
+        if not self.state.get("oofem_executable"):
+            from OOFEMSalomePlugin.OOFEMRunner import resolve_executable
 
-        self.loadTimeFunctionTemplates()
-        self.loadCrossSectionTemplates()
-        self.loadAnalysisTemplates()
-        self.loadMaterialTemplates()
-        self.loadBCTemplates()
-        self.ensureDefaultTimeFunction()  # Ensure at least one time function exists
+            self.state["oofem_executable"] = resolve_executable() or ""
+        self.state.setdefault("last_input_file", "")
 
         self.populateMeshes()
-        self.populateAnalysis()
         self.populateElementMapping()
         self.populateMaterials()
-        self.populateCrossSections()
-        self.populateTimeFunctions()
         self.populateBCs()
+        preset_index = self.solverPresetCombo.findData(self.state["solver_preset"])
+        if preset_index >= 0:
+            self.solverPresetCombo.setCurrentIndex(preset_index)
+        self.oofemExecutableEdit.setText(self.state["oofem_executable"])
+        self.inputFileEdit.setText(self.state["last_input_file"])
+        self.last_export_file = self.state["last_input_file"]
+        self.refreshResults()
 
-    def ensureDefaultTimeFunction(self):
-        """
-        If no time functions are defined, creates a default constant one.
-        This ensures there is always at least one option available for BCs.
-        """
-        time_functions = self.state.get("time_functions")
-        
-        if time_functions: # If the list is not empty, do nothing.
-            return
-
-        # If we are here, the list is empty. Let's add the default.
-        DEFAULT_TF_NAME = "ConstantFunction"
-        # Find the template for the constant function
-        constant_template = next((t for t in self.tf_templates if t['oofem_name'] == 'ConstantFunction'), None)
-
-        if not constant_template:
-            print("Warning: Could not find 'ConstantFunction' template to create default time function.")
-            return
-
-        new_tf_data = {
-            'id': str(uuid.uuid4()),
-            'name': DEFAULT_TF_NAME,
-            'oofem_type': constant_template['oofem_name'],
-            'params': {p['key']: p['default'] for p in constant_template.get('params', []) if 'default' in p}
-        }
-        time_functions.append(new_tf_data)
-        print(f"INFO: No time functions found. Created '{DEFAULT_TF_NAME}' as a default.")
+        mesh_count = self.meshCombo.count()
+        if mesh_count:
+            self.statusLabel.setText(
+                "Loaded {} mesh{} from the active study.".format(
+                    mesh_count, "" if mesh_count == 1 else "es"
+                )
+            )
+        else:
+            self.statusLabel.setText(
+                "No meshes found. Create or import a mesh in SALOME's Mesh module, "
+                "then refresh."
+            )
 
     # ---------------------------
     # Mesh selector
     # ---------------------------
     def populateMeshes(self):
-        import salome
-
-        # Clear the combo box before populating with new items.
+        selected_mesh_id = self.state.get("selected_mesh_id") or self.meshCombo.currentData()
+        self.meshCombo.blockSignals(True)
         self.meshCombo.clear()
+        try:
+            smesh_comp = self.study.FindComponent("SMESH")
+            if smesh_comp is not None:
+                child_iterator = self.study.NewChildIterator(smesh_comp)
+                while child_iterator.More():
+                    s_object = child_iterator.Value()
+                    mesh_object = s_object.GetObject()
+                    if (
+                        mesh_object is not None
+                        and hasattr(mesh_object, "GetGroups")
+                        and hasattr(mesh_object, "GetNodesId")
+                    ):
+                        self.meshCombo.addItem(s_object.GetName(), s_object.GetID())
+                    child_iterator.Next()
+        except Exception:
+            # CORBA can report UNKNOWN while a study or SMESH component is being
+            # created. Keep the module open and let Refresh retry the lookup.
+            print("OOFEM: active-study mesh lookup failed")
+            traceback.print_exc()
+        finally:
+            self.meshCombo.blockSignals(False)
 
-        # The SMESH component is guaranteed to exist by the check in populateAll().
-        smesh_comp = salome.myStudy.FindComponent("SMESH")
+        selected_index = self.meshCombo.findData(selected_mesh_id)
+        if selected_index >= 0:
+            self.meshCombo.setCurrentIndex(selected_index)
+        self.onMeshChanged(self.meshCombo.currentIndex())
 
-        # Iterate through all objects in the SMESH component, which are the meshes.
-        child_iterator = self.study.NewChildIterator(smesh_comp)
-        while child_iterator.More():
-            s_object = child_iterator.Value()
-            mesh_object = s_object.GetObject() # Get the underlying CORBA object
-            if mesh_object:
-                # Store the SObject's Entry ID. This is a robust, unique identifier
-                # that we can use to retrieve the full mesh object later.
-                self.meshCombo.addItem(s_object.GetName(), s_object.GetID())
-            child_iterator.Next()
+    def onMeshChanged(self, index):
+        if index >= 0 and self.state is not None:
+            self.state["selected_mesh_id"] = self.meshCombo.itemData(index)
+
+    def _meshFromEntry(self, mesh_id):
+        if self.study is not None:
+            try:
+                study_object = self.study.FindObjectID(mesh_id)
+                if study_object is not None:
+                    mesh = study_object.GetObject()
+                    if mesh is not None:
+                        return mesh
+            except Exception:
+                traceback.print_exc()
+        try:
+            import salome
+
+            return salome.IDToObject(mesh_id)
+        except Exception:
+            return None
 
     def getMeshGroups(self):
-        """Returns a list of mesh group names from the selected mesh."""
-        import salome
-
+        """Classify groups into material-domain, node, and boundary choices."""
+        empty = {"elements": [], "nodes": [], "boundaries": []}
         mesh_id = self.meshCombo.currentData()
         if not mesh_id:
-            return []
-        
+            return empty
+
         try:
-            # Get the SMESH component from the study.
-            mesh = salome.IDToObject(mesh_id)
+            import SMESH
+
+            mesh = self._meshFromEntry(mesh_id)
             if not mesh:
                 print("Could not convert selected object to a mesh.")
-                return []
-            # GetGroups() returns both node and element groups. We can filter later if needed.
-            return [g.GetName() for g in mesh.GetGroups()]
-        except Exception as e:
-            print(f"Could not get mesh groups: {e}")
-            return []
+                return empty
+
+            node_type = getattr(SMESH.NODE, "_v", SMESH.NODE)
+            dimensional_types = [
+                getattr(getattr(SMESH, name, None), "_v", getattr(SMESH, name, None))
+                for name in ("EDGE", "FACE", "VOLUME")
+            ]
+            groups_by_type = {}
+            for group in mesh.GetGroups():
+                group_type = getattr(group.GetType(), "_v", group.GetType())
+                groups_by_type.setdefault(group_type, []).append(group.GetName())
+
+            result = dict(empty)
+            result["nodes"] = sorted(groups_by_type.get(node_type, []))
+            available_dimensions = [
+                entity_type
+                for entity_type in dimensional_types
+                if entity_type is not None and groups_by_type.get(entity_type)
+            ]
+            if not available_dimensions:
+                return result
+            material_type = available_dimensions[-1]
+            result["elements"] = sorted(groups_by_type.get(material_type, []))
+            material_index = dimensional_types.index(material_type)
+            if material_index > 0:
+                boundary_type = dimensional_types[material_index - 1]
+                result["boundaries"] = sorted(
+                    groups_by_type.get(boundary_type, [])
+                )
+            return result
+        except Exception as error:
+            print("Could not get mesh groups: {}".format(error))
+            return empty
 
     # ---------------------------
     # Element mapping table
@@ -491,87 +443,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.elemTable.insertRow(row)
             self.elemTable.setItem(row, 0, QtWidgets.QTableWidgetItem(salome_type))
             self.elemTable.setItem(row, 1, QtWidgets.QTableWidgetItem(oofem_type))
-            
-    # ---------------------------
-    # Analysis
-    # ---------------------------
-    def populateAnalysis(self):
-        """Populates the analysis selection UI."""
-        self._block_signals = True
-        self.analysisTypeCombo.clear()
-        self.analysisTypeCombo.addItems([t['display_name'] for t in self.analysis_templates])
-
-        current_type = self.state.get("analysis", {}).get("oofem_type")
-        if current_type:
-            idx = next((i for i, t in enumerate(self.analysis_templates) if t['oofem_name'] == current_type), -1)
-            if idx != -1:
-                self.analysisTypeCombo.setCurrentIndex(idx)
-        
-        self._block_signals = False
-        self.populateAnalysisDetails()
-
-    def populateAnalysisDetails(self):
-        """Populates the property editor for the selected analysis."""
-        self._block_signals = True
-        self.analysisPropsTable.setRowCount(0)
-
-        selected_index = self.analysisTypeCombo.currentIndex()
-        if selected_index < 0 or not self.analysis_templates:
-            self._block_signals = False
-            return
-
-        template = self.analysis_templates[selected_index]
-        analysis_data = self.state.get("analysis", {})
-        current_params = analysis_data.get("params", {})
-
-        for param_def in template.get("params", []):
-            row = self.analysisPropsTable.rowCount()
-            self.analysisPropsTable.insertRow(row)
-            
-            is_optional = param_def.get("optional", False)
-            display_name = param_def['name']
-            if is_optional:
-                display_name += " (optional)"
-
-            name_item = QtWidgets.QTableWidgetItem(display_name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-            name_item.setData(Qt.UserRole, param_def['key'])
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
-            name_item.setData(Qt.UserRole + 2, is_optional)
-            
-            value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
-
-            description = param_def.get("description")
-            if description:
-                name_item.setToolTip(description)
-                value_item.setToolTip(description)
-
-            self.analysisPropsTable.setItem(row, 0, name_item)
-            self.analysisPropsTable.setItem(row, 1, value_item)
-        
-        self._block_signals = False
-
-    def onAnalysisTypeChanged(self, index):
-        """Updates state when a new analysis type is selected."""
-        if self._block_signals or index < 0:
-            return
-
-        template = self.analysis_templates[index]
-        new_type = template['oofem_name']
-        
-        # Create new params dict with defaults from template
-        new_params = {}
-        for p in template.get('params', []):
-            if 'default' in p:
-                new_params[p['key']] = p['default']
-
-        self.state['analysis'] = {
-            'oofem_type': new_type,
-            'params': new_params
-        }
-        
-        self.populateAnalysisDetails()
             
     # ---------------------------
     # Materials
@@ -590,6 +461,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             
             self.matTable.setItem(row, 0, name_item)
             self.matTable.setItem(row, 1, QtWidgets.QTableWidgetItem(mat_data.get("oofem_type", "")))
+            self.matTable.setItem(row, 2, QtWidgets.QTableWidgetItem(mat_data.get("assigned_group", "")))
         self._block_signals = False
         self.populateMaterialDetails() # Clear details pane if no selection
 
@@ -630,11 +502,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             name_item.setData(Qt.UserRole, param_def['key']) # Store key (e.g., "E")
             # Store the expected data type for later conversion. Default to 'float' for backward compatibility.
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'float'))
             
-            name_item.setData(Qt.UserRole + 2, is_optional)
             value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
+            value_item = QtWidgets.QTableWidgetItem(str(value))
+            name_item.setData(Qt.UserRole + 2, is_optional)
 
             # Set tooltip if a description is available in the template
             description = param_def.get("description")
@@ -649,42 +521,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
     def addMaterial(self):
         """Opens a dialog to add a new material instance."""
-        new_mat_data = OOFEMMaterialDialog.run(self.material_templates, parent=self)
+        mesh_groups = self.getMeshGroups()
+        new_mat_data = OOFEMMaterialDialog.run(
+            self.material_templates,
+            mesh_groups,
+            material_library=self.material_library,
+            parent=self,
+        )
 
         if new_mat_data:
-            # Add unique ID and default parameters
             new_mat_data['id'] = str(uuid.uuid4())
-            new_mat_data['params'] = {}
-            template = next((t for t in self.material_templates if t['oofem_name'] == new_mat_data['oofem_type']), None)
-            if template:
-                for p in template.get('params', []):
-                    # Only add a parameter if it has a defined default value.
-                    if 'default' in p:
-                        new_mat_data['params'][p['key']] = p['default']
-
             self.state["materials"].append(new_mat_data)
             self.populateMaterials()
-
-    def editMaterial(self):
-        """Opens a dialog to edit the selected material instance."""
-        selected_items = self.matTable.selectedItems()
-        if not selected_items:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No material selected to edit.")
-            return
-
-        mat_id = selected_items[0].data(Qt.UserRole)
-        mat_data = next((m for m in self.state['materials'] if m.get('id') == mat_id), None)
-        if not mat_data: return
-
-        updated_data = OOFEMMaterialDialog.run(self.material_templates, existing_material=mat_data, parent=self)
-
-        if updated_data:
-            mat_data.update(updated_data)
-            self.populateMaterials()
-            for row in range(self.matTable.rowCount()):
-                if self.matTable.item(row, 0).data(Qt.UserRole) == mat_id:
-                    self.matTable.selectRow(row)
-                    break
 
     def removeMaterial(self):
         """Removes the selected material from the state."""
@@ -698,245 +546,13 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateMaterials()
 
     # ---------------------------
-    # Cross Sections
-    # ---------------------------
-    def populateCrossSections(self):
-        """Populates the main cross section table from the plugin state."""
-        self._block_signals = True
-        self.csTable.setRowCount(0)
-        # Create a quick lookup map for material names
-        mat_id_to_name = {m['id']: m.get('name', 'Unnamed') for m in self.state.get("materials", [])}
-
-        for cs_data in self.state.get("cross_sections", []):
-            row = self.csTable.rowCount()
-            self.csTable.insertRow(row)
-
-            name_item = QtWidgets.QTableWidgetItem(cs_data.get("name", "Unnamed"))
-            name_item.setData(Qt.UserRole, cs_data.get("id"))
-
-            material_name = mat_id_to_name.get(cs_data.get("material_id"), "INVALID/DELETED")
-
-            self.csTable.setItem(row, 0, name_item)
-            self.csTable.setItem(row, 1, QtWidgets.QTableWidgetItem(cs_data.get("oofem_type", "")))
-            self.csTable.setItem(row, 2, QtWidgets.QTableWidgetItem(material_name))
-            self.csTable.setItem(row, 3, QtWidgets.QTableWidgetItem(cs_data.get("assigned_group", "")))
-        self._block_signals = False
-        self.populateCrossSectionDetails()
-
-    def populateCrossSectionDetails(self):
-        """Populates the property editor based on the selected cross section."""
-        self._block_signals = True
-        self.csPropsTable.setRowCount(0)
-
-        selected_items = self.csTable.selectedItems()
-        if not selected_items:
-            self._block_signals = False
-            return
-
-        cs_id = selected_items[0].data(Qt.UserRole)
-        cs_data = next((cs for cs in self.state['cross_sections'] if cs['id'] == cs_id), None)
-        if not cs_data:
-            self._block_signals = False
-            return
-
-        template = next((t for t in self.cs_templates if t['oofem_name'] == cs_data['oofem_type']), None)
-        if not template:
-            self._block_signals = False
-            return
-
-        current_params = cs_data.get("params", {})
-        for param_def in template.get("params", []):
-            row = self.csPropsTable.rowCount()
-            self.csPropsTable.insertRow(row)
-
-            is_optional = param_def.get("optional", False)
-            display_name = param_def['name']
-            if is_optional: display_name += " (optional)"
-
-            name_item = QtWidgets.QTableWidgetItem(display_name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-            name_item.setData(Qt.UserRole, param_def['key'])
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
-            name_item.setData(Qt.UserRole + 2, is_optional)
-
-            value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
-
-            description = param_def.get("description")
-            if description:
-                name_item.setToolTip(description)
-                value_item.setToolTip(description)
-
-            self.csPropsTable.setItem(row, 0, name_item)
-            self.csPropsTable.setItem(row, 1, value_item)
-
-        self._block_signals = False
-
-    def addCrossSection(self):
-        """Opens a dialog to add a new cross section instance."""
-        mesh_groups = self.getMeshGroups()
-        materials = self.state.get("materials", [])
-        salome_types = self.state.get("element_mapping", {}).keys()
-        new_cs_data = OOFEMCrossSectionDialog.run(self.cs_templates, materials, mesh_groups, salome_types, parent=self)
-
-        if new_cs_data:
-            new_cs_data['id'] = str(uuid.uuid4())
-            new_cs_data['params'] = {}
-            template = next((t for t in self.cs_templates if t['oofem_name'] == new_cs_data['oofem_type']), None)
-            if template:
-                for p in template.get('params', []):
-                    if 'default' in p:
-                        new_cs_data['params'][p['key']] = p['default']
-            self.state["cross_sections"].append(new_cs_data)
-            self.populateCrossSections()
-
-    def editCrossSection(self):
-        """Opens a dialog to edit the selected cross section instance."""
-        selected_items = self.csTable.selectedItems()
-        if not selected_items:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No cross section selected to edit.")
-            return
-
-        cs_id = selected_items[0].data(Qt.UserRole)
-        cs_data = next((cs for cs in self.state['cross_sections'] if cs.get('id') == cs_id), None)
-        if not cs_data: return
-
-        mesh_groups = self.getMeshGroups()
-        materials = self.state.get("materials", [])
-        salome_types = self.state.get("element_mapping", {}).keys()
-        
-        updated_data = OOFEMCrossSectionDialog.run(self.cs_templates, materials, mesh_groups, salome_types, existing_cs=cs_data, parent=self)
-
-        if updated_data:
-            cs_data.update(updated_data)
-            self.populateCrossSections()
-            for row in range(self.csTable.rowCount()):
-                if self.csTable.item(row, 0).data(Qt.UserRole) == cs_id:
-                    self.csTable.selectRow(row)
-                    break
-
-    def removeCrossSection(self):
-        """Removes the selected cross section from the state."""
-        selected_items = self.csTable.selectedItems()
-        if not selected_items:
-            return
-        cs_id = selected_items[0].data(Qt.UserRole)
-        self.state['cross_sections'] = [cs for cs in self.state['cross_sections'] if cs.get('id') != cs_id]
-        self.populateCrossSections()
-
-    # ---------------------------
-    # Time Functions
-    # ---------------------------
-    def populateTimeFunctions(self):
-        """Populates the main time function table from the plugin state."""
-        self._block_signals = True
-        self.tfTable.setRowCount(0)
-        for tf_data in self.state.get("time_functions", []):
-            row = self.tfTable.rowCount()
-            self.tfTable.insertRow(row)
-
-            name_item = QtWidgets.QTableWidgetItem(tf_data.get("name", "Unnamed"))
-            name_item.setData(Qt.UserRole, tf_data.get("id"))
-
-            self.tfTable.setItem(row, 0, name_item)
-            self.tfTable.setItem(row, 1, QtWidgets.QTableWidgetItem(tf_data.get("oofem_type", "")))
-        self._block_signals = False
-        self.populateTimeFunctionDetails()
-
-    def populateTimeFunctionDetails(self):
-        """Populates the property editor based on the selected time function."""
-        self._block_signals = True
-        self.tfPropsTable.setRowCount(0)
-
-        selected_items = self.tfTable.selectedItems()
-        if not selected_items:
-            self._block_signals = False
-            return
-
-        tf_id = selected_items[0].data(Qt.UserRole)
-        tf_data = next((tf for tf in self.state['time_functions'] if tf['id'] == tf_id), None)
-        if not tf_data:
-            self._block_signals = False
-            return
-
-        template = next((t for t in self.tf_templates if t['oofem_name'] == tf_data['oofem_type']), None)
-        if not template:
-            self._block_signals = False
-            return
-
-        current_params = tf_data.get("params", {})
-        for param_def in template.get("params", []):
-            row = self.tfPropsTable.rowCount()
-            self.tfPropsTable.insertRow(row)
-
-            name_item = QtWidgets.QTableWidgetItem(param_def['name'])
-            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-            name_item.setData(Qt.UserRole, param_def['key'])
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
-
-            value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
-
-            self.tfPropsTable.setItem(row, 0, name_item)
-            self.tfPropsTable.setItem(row, 1, value_item)
-
-        self._block_signals = False
-
-    def addTimeFunction(self):
-        """Opens a dialog to add a new time function instance."""
-        new_tf_data = OOFEMTimeFunctionDialog.run(self.tf_templates, parent=self)
-
-        if new_tf_data:
-            new_tf_data['id'] = str(uuid.uuid4())
-            new_tf_data['params'] = {}
-            template = next((t for t in self.tf_templates if t['oofem_name'] == new_tf_data['oofem_type']), None)
-            if template:
-                for p in template.get('params', []):
-                    if 'default' in p:
-                        new_tf_data['params'][p['key']] = p['default']
-            self.state["time_functions"].append(new_tf_data)
-            self.populateTimeFunctions()
-
-    def editTimeFunction(self):
-        """Opens a dialog to edit the selected time function instance."""
-        selected_items = self.tfTable.selectedItems()
-        if not selected_items:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No time function selected to edit.")
-            return
-
-        tf_id = selected_items[0].data(Qt.UserRole)
-        tf_data = next((tf for tf in self.state['time_functions'] if tf.get('id') == tf_id), None)
-        if not tf_data: return
-
-        updated_data = OOFEMTimeFunctionDialog.run(self.tf_templates, existing_tf=tf_data, parent=self)
-
-        if updated_data:
-            tf_data.update(updated_data)
-            self.populateTimeFunctions()
-            for row in range(self.tfTable.rowCount()):
-                if self.tfTable.item(row, 0).data(Qt.UserRole) == tf_id:
-                    self.tfTable.selectRow(row)
-                    break
-
-    def removeTimeFunction(self):
-        """Removes the selected time function from the state."""
-        selected_items = self.tfTable.selectedItems()
-        if not selected_items:
-            return
-        tf_id = selected_items[0].data(Qt.UserRole)
-        self.state['time_functions'] = [tf for tf in self.state['time_functions'] if tf.get('id') != tf_id]
-        self.populateTimeFunctions()
-
-    # ---------------------------
     # Boundary Conditions
     # ---------------------------
     def populateBCs(self):
         """Populates the main BC table from the plugin state."""
         self._block_signals = True
         self.bcTable.setRowCount(0)
-        tf_id_to_name = {tf['id']: tf.get('name', 'Unnamed') for tf in self.state.get("time_functions", [])}
-
-        for bc_data in self.state.get("bcs", []):
+        for i, bc_data in enumerate(self.state.get("bcs", [])):
             row = self.bcTable.rowCount()
             self.bcTable.insertRow(row)
             
@@ -946,9 +562,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.bcTable.setItem(row, 0, name_item)
             self.bcTable.setItem(row, 1, QtWidgets.QTableWidgetItem(bc_data.get("oofem_type", "")))
             self.bcTable.setItem(row, 2, QtWidgets.QTableWidgetItem(bc_data.get("assigned_group", "")))
-
-            tf_name = tf_id_to_name.get(bc_data.get("time_function_id"), "None")
-            self.bcTable.setItem(row, 3, QtWidgets.QTableWidgetItem(tf_name))
         self._block_signals = False
         self.populateBCDetails()
 
@@ -986,11 +599,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             name_item = QtWidgets.QTableWidgetItem(display_name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             name_item.setData(Qt.UserRole, param_def['key'])
-            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'string'))
+            name_item.setData(Qt.UserRole + 1, param_def.get('type', 'float'))
             name_item.setData(Qt.UserRole + 2, is_optional)
             
             value = current_params.get(param_def['key'], param_def.get('default', ''))
-            value_item = QtWidgets.QTableWidgetItem(self._format_param_value(value))
+            value_item = QtWidgets.QTableWidgetItem(str(value))
 
             description = param_def.get("description")
             if description:
@@ -1005,8 +618,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     def addBC(self):
         """Opens a dialog to add a new BC instance."""
         mesh_groups = self.getMeshGroups()
-        time_functions = self.state.get("time_functions", [])
-        new_bc_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, time_functions, parent=self)
+        new_bc_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, parent=self)
 
         if new_bc_data:
             new_bc_data['id'] = str(uuid.uuid4())
@@ -1020,30 +632,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["bcs"].append(new_bc_data)
             self.populateBCs()
 
-    def editBC(self):
-        """Opens a dialog to edit the selected BC instance."""
-        selected_items = self.bcTable.selectedItems()
-        if not selected_items:
-            QtWidgets.QMessageBox.warning(self, "Warning", "No boundary condition selected to edit.")
-            return
-
-        bc_id = selected_items[0].data(Qt.UserRole)
-        bc_data = next((bc for bc in self.state['bcs'] if bc.get('id') == bc_id), None)
-        if not bc_data: return
-
-        mesh_groups = self.getMeshGroups()
-        time_functions = self.state.get("time_functions", [])
-        
-        updated_data = OOFEMBCDialog.run(self.bc_templates, mesh_groups, time_functions, existing_bc=bc_data, parent=self)
-
-        if updated_data:
-            bc_data.update(updated_data)
-            self.populateBCs()
-            for row in range(self.bcTable.rowCount()):
-                if self.bcTable.item(row, 0).data(Qt.UserRole) == bc_id:
-                    self.bcTable.selectRow(row)
-                    break
-
     def removeBC(self):
         """Removes the selected BC from the state."""
         selected_items = self.bcTable.selectedItems()
@@ -1054,94 +642,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         bc_id = selected_items[0].data(Qt.UserRole)
         self.state['bcs'] = [m for m in self.state['bcs'] if m.get('id') != bc_id]
         self.populateBCs()
-
-    def onAnalysisPropertyChanged(self, row, column):
-        """Updates the state when an analysis property value is changed."""
-        if self._block_signals or column != 1:
-            return
-
-        analysis_data = self.state.get('analysis')
-        if not analysis_data: return
-
-        key_item = self.analysisPropsTable.item(row, 0)
-        value_item = self.analysisPropsTable.item(row, 1)
-        param_key = key_item.data(Qt.UserRole)
-        param_type = key_item.data(Qt.UserRole + 1)
-        is_optional = key_item.data(Qt.UserRole + 2)
-        value_text = value_item.text().strip()
-
-        if is_optional and not value_text:
-            if param_key in analysis_data['params']:
-                del analysis_data['params'][param_key]
-            return
-
-        try:
-            new_value = self._parse_param_value(value_text, param_type)
-        except (ValueError, TypeError):
-            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
-            return
-        analysis_data['params'][param_key] = new_value
-
-    def onCrossSectionPropertyChanged(self, row, column):
-        """Updates the state when a cross section property value is changed."""
-        if self._block_signals or column != 1:
-            return
-
-        selected_items = self.csTable.selectedItems()
-        if not selected_items: return
-
-        cs_id = selected_items[0].data(Qt.UserRole)
-        cs_data = next((cs for cs in self.state['cross_sections'] if cs['id'] == cs_id), None)
-        if not cs_data: return
-
-        key_item = self.csPropsTable.item(row, 0)
-        value_item = self.csPropsTable.item(row, 1)
-        param_key = key_item.data(Qt.UserRole)
-        param_type = key_item.data(Qt.UserRole + 1)
-        is_optional = key_item.data(Qt.UserRole + 2)
-        value_text = value_item.text().strip()
-
-        if is_optional and not value_text:
-            if param_key in cs_data['params']:
-                del cs_data['params'][param_key]
-            return
-
-        try:
-            new_value = self._parse_param_value(value_text, param_type)
-        except (ValueError, TypeError):
-            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
-            return
-        cs_data['params'][param_key] = new_value
-
-    def onTimeFunctionPropertyChanged(self, row, column):
-        """Updates the state when a time function property value is changed."""
-        if self._block_signals or column != 1:
-            return
-
-        selected_items = self.tfTable.selectedItems()
-        if not selected_items: return
-
-        tf_id = selected_items[0].data(Qt.UserRole)
-        tf_data = next((tf for tf in self.state['time_functions'] if tf['id'] == tf_id), None)
-        if not tf_data: return
-
-        key_item = self.tfPropsTable.item(row, 0)
-        value_item = self.tfPropsTable.item(row, 1)
-        param_key = key_item.data(Qt.UserRole)
-        param_type = key_item.data(Qt.UserRole + 1)
-        value_text = value_item.text().strip()
-
-        if not value_text:
-            if param_key in tf_data['params']:
-                del tf_data['params'][param_key]
-            return
-
-        try:
-            new_value = self._parse_param_value(value_text, param_type)
-        except (ValueError, TypeError):
-            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
-            return
-        tf_data['params'][param_key] = new_value
 
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
@@ -1167,9 +667,17 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 del bc_data['params'][param_key]
             return
 
+        new_value = None
         try:
-            new_value = self._parse_param_value(value_text, param_type)
-        except (ValueError, TypeError):
+            if param_type == 'float':
+                new_value = float(value_text)
+            elif param_type == 'int':
+                new_value = int(value_text)
+            elif param_type == 'string':
+                new_value = str(value_text)
+            else:
+                new_value = str(value_text)
+        except ValueError:
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         bc_data['params'][param_key] = new_value
@@ -1205,9 +713,19 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 print(f"INFO: Optional parameter '{param_key}' was removed.")
             return
 
+        new_value = None
         try:
-            new_value = self._parse_param_value(value_text, param_type)
-        except (ValueError, TypeError):
+            if param_type == 'float':
+                new_value = float(value_text)
+            elif param_type == 'int':
+                new_value = int(value_text)
+            elif param_type == 'string':
+                new_value = str(value_text)
+            # Future types like 'bool' or choice lists can be added here.
+            else:
+                # Default to string if type is unknown or not specified
+                new_value = str(value_text)
+        except ValueError:
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         mat_data['params'][param_key] = new_value
@@ -1215,89 +733,327 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     # ---------------------------
     # State Management
     # ---------------------------
+    def collectElementMapping(self):
+        new_map = {}
+        for row in range(self.elemTable.rowCount()):
+            salome_item = self.elemTable.item(row, 0)
+            oofem_item = self.elemTable.item(row, 1)
+            if salome_item is None or oofem_item is None:
+                continue
+            salome_type = salome_item.text().strip()
+            oofem_type = oofem_item.text().strip()
+            if salome_type:
+                new_map[salome_type] = oofem_type
+        self.state["element_mapping"] = new_map
+
     def saveState(self):
         if self.study is None:
             QtWidgets.QMessageBox.warning(self, "Error", "Plugin not initialized. Click Refresh first.")
             return
 
-        new_map = {}
-        for row in range(self.elemTable.rowCount()):
-            salome_type = self.elemTable.item(row, 0).text()
-            oofem_type = self.elemTable.item(row, 1).text()
-            new_map[salome_type] = oofem_type
+        self.collectElementMapping()
+        self._solverSettingsChanged()
 
-        # Update state dictionary
-        self.state["element_mapping"] = new_map
-        # self.state["materials"] and self.state["bcs"] are updated dynamically.
+        from OOFEMSalomePlugin.OOFEMModule import getModule
 
-        OOFEMState.save(self.study, self.state)
+        if getModule().set_study_state(self.state, mark_modified=True):
+            QtWidgets.QMessageBox.information(
+                self,
+                "OOFEM Settings Committed",
+                "OOFEM settings are ready. Use File > Save to include them in the SALOME study.",
+            )
+        else:
+            QtWidgets.QMessageBox.critical(
+                self, "Save Failed", "OOFEM could not collect the project settings."
+            )
 
-        QtWidgets.QMessageBox.information(self, "Saved", "Plugin state saved to the Salome study.")
 
     # ---------------------------
-    # Export
+    # Export / solve
     # ---------------------------
-    def export(self):
-        if self.study is None:
-            QtWidgets.QMessageBox.warning(self, "Error", "Plugin not fully initialized. Click Refresh first.")
+    def _solverSettingsChanged(self, *unused):
+        if not isinstance(self.state, dict):
             return
+        self.state["solver_preset"] = self.solverPresetCombo.currentData()
+        self.state["oofem_executable"] = self.oofemExecutableEdit.text().strip()
+        self.state["last_input_file"] = self.inputFileEdit.text().strip()
 
+    def _selectedSolverSettings(self):
+        from OOFEMSalomePlugin.OOFEMConfig import solver_settings
+
+        return solver_settings(self.solverPresetCombo.currentData())
+
+    def browseOOFEMExecutable(self):
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select OOFEM Executable", self.oofemExecutableEdit.text()
+        )
+        if filename:
+            self.oofemExecutableEdit.setText(filename)
+            self._solverSettingsChanged()
+
+    def browseInputFile(self):
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "OOFEM Input File",
+            self.inputFileEdit.text() or "oofem-model.in",
+            "OOFEM Input Files (*.in);;All Files (*)",
+        )
+        if filename:
+            if not os.path.splitext(filename)[1]:
+                filename += ".in"
+            self.inputFileEdit.setText(filename)
+            self._solverSettingsChanged()
+            self.refreshResults()
+
+    def _makeExporter(self):
+        if self.study is None:
+            raise RuntimeError("Plugin not initialized. Click Refresh first.")
         mesh_id = self.meshCombo.currentData()
         if not mesh_id:
-            QtWidgets.QMessageBox.warning(self, "Error", "No mesh selected for export.")
-            return
+            raise RuntimeError("No mesh selected for export.")
+        mesh = self._meshFromEntry(mesh_id)
+        if not mesh:
+            raise RuntimeError("The selected study object is not a valid SMESH mesh.")
 
+        from OOFEMSalomePlugin.OOFEMExporter import OOFEMExporter
+
+        self.collectElementMapping()
+        return OOFEMExporter(
+            mesh,
+            self.state.get("element_mapping", {}),
+            self.state.get("materials", []),
+            self.state.get("bcs", []),
+            self.bc_templates,
+            solver_settings=self._selectedSolverSettings(),
+        )
+
+    def validateModel(self):
         try:
-            import salome
-            from OOFEMSalomePlugin.OOFEMExporter import OOFEMExporter
+            summary = self._makeExporter().validate()
+            message = (
+                "Valid {domain} model: {nodes} nodes, {elements} elements, "
+                "{materials} materials, {boundary_conditions} BCs, {sets} sets."
+            ).format(**summary)
+            self.exportSummaryLabel.setText(message)
+            self.statusLabel.setText(message)
+            return summary
+        except Exception as error:
+            self.exportSummaryLabel.setText("Validation failed: {}".format(error))
+            QtWidgets.QMessageBox.critical(
+                self, "OOFEM Model Validation", str(error)
+            )
+            return None
 
-            mesh = salome.IDToObject(mesh_id)
-            if not mesh:
-                QtWidgets.QMessageBox.warning(self, "Error", "The selected object could not be identified as a valid mesh.")
+    def _chooseInputFilename(self):
+        filename = self.inputFileEdit.text().strip()
+        if filename:
+            return filename
+        mesh_id = self.meshCombo.currentData()
+        study_object = self.study.FindObjectID(mesh_id) if self.study else None
+        default_name = "{}.in".format(
+            study_object.GetName() if study_object else "oofem-model"
+        )
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export OOFEM Input File",
+            default_name,
+            "OOFEM Input Files (*.in);;All Files (*)",
+        )
+        if filename and not os.path.splitext(filename)[1]:
+            filename += ".in"
+        return filename
+
+    def _exportModel(self):
+        filename = self._chooseInputFilename()
+        if not filename:
+            return None
+        exporter = self._makeExporter()
+        summary = exporter.validate()
+        result = exporter.export(filename)
+        self.inputFileEdit.setText(result["input_file"])
+        self.last_export_file = result["input_file"]
+        self._solverSettingsChanged()
+        self.exportSummaryLabel.setText(
+            "Exported {domain}: {nodes} nodes, {elements} elements to {path}".format(
+                path=result["input_file"], **summary
+            )
+        )
+        self.refreshResults()
+        return result
+
+    def export(self):
+        try:
+            result = self._exportModel()
+            if result:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    "OOFEM input generated at:\n{}".format(result["input_file"]),
+                )
+            return result
+        except Exception as error:
+            QtWidgets.QMessageBox.critical(self, "OOFEM Export", str(error))
+            traceback.print_exc()
+            return None
+
+    def runSolver(self):
+        try:
+            result = self._exportModel()
+            if not result:
                 return
 
-            study = salome.myStudy
-            so = salome.myStudy.FindObjectID(mesh_id)
+            from OOFEMSalomePlugin.OOFEMRunner import resolve_executable
 
-            # Let user choose where to save the file
-            default_name = f"{so.GetName()}.in"
-            filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export OOFEM Input File", default_name, "OOFEM Input Files (*.in);;All Files (*)")
+            executable = resolve_executable(self.oofemExecutableEdit.text().strip())
+            if executable is None:
+                raise RuntimeError(
+                    "OOFEM executable not found. Browse to it or set OOFEM_BIN."
+                )
+            if self.solverProcess is not None and (
+                self.solverProcess.state() != QtCore.QProcess.NotRunning
+            ):
+                raise RuntimeError("An OOFEM solve is already running.")
 
-            if not filename:
-                return  # User cancelled
-
-            # Get study info to pass to the exporter for the file header
-            study_name = "Unknown"
-            study_path = ""
-            if self.study:
-                # Get study name: Try method first, then attribute
-                if hasattr(self.study, "GetStudyName"):
-                    study_name = self.study.GetStudyName()
-                elif hasattr(self.study, "Name"):
-                    study_name = self.study.Name
-                # Get study path: Try method first, then attribute
-                if hasattr(self.study, "GetStudyPath"):
-                    study_path = self.study.GetStudyPath()
-                elif hasattr(self.study, "URL"):
-                    study_path = self.study.URL
-
-            # Create and run the exporter
-            exporter = OOFEMExporter(
-                mesh,
-                self.state.get("element_mapping", {}),
-                self.state.get("materials", []),
-                self.state.get("cross_sections", []),
-                self.state.get("bcs", []),
-                self.state.get("time_functions", []),
-                self.material_templates,
-                self.bc_templates,
-                self.state.get("analysis", {}),
-                study_name,
-                study_path
+            self.oofemExecutableEdit.setText(executable)
+            self._solverSettingsChanged()
+            self.solverLog.clear()
+            self._solver_output_buffer = ""
+            self.solverProcess = QtCore.QProcess(self)
+            self.solverProcess.setProcessChannelMode(QtCore.QProcess.MergedChannels)
+            self.solverProcess.setWorkingDirectory(
+                os.path.dirname(result["input_file"])
             )
-            exporter.export(filename)
+            self.solverProcess.setProgram(executable)
+            self.solverProcess.setArguments(["-f", result["input_file"]])
+            self.solverProcess.readyReadStandardOutput.connect(
+                self._readSolverOutput
+            )
+            self.solverProcess.finished.connect(self._solverFinished)
+            self.runBtn.setEnabled(False)
+            self.solverLog.appendPlainText(
+                "Running: {} -f {}".format(executable, result["input_file"])
+            )
+            self.solverProcess.start()
+        except Exception as error:
+            QtWidgets.QMessageBox.critical(self, "OOFEM Solver", str(error))
+            traceback.print_exc()
 
-            QtWidgets.QMessageBox.information(self, "Export Successful", f"Mesh exported successfully to:\n{filename}")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"An unexpected error occurred during export:\n{e}")
-            traceback.print_exc()  # Also print to console
+    def _readSolverOutput(self):
+        if self.solverProcess is None:
+            return
+        data = bytes(self.solverProcess.readAllStandardOutput()).decode(
+            "utf-8", errors="replace"
+        )
+        if data:
+            self._solver_output_buffer += data
+            self.solverLog.moveCursor(self.solverLog.textCursor().End)
+            self.solverLog.insertPlainText(data)
+            self.solverLog.moveCursor(self.solverLog.textCursor().End)
+
+    def _solverFinished(self, exit_code, exit_status):
+        self._readSolverOutput()
+        self.runBtn.setEnabled(True)
+        succeeded = exit_code == 0 and "0 error(s)" in self._solver_output_buffer
+        if succeeded:
+            self.statusLabel.setText("OOFEM solve completed successfully.")
+            self.exportSummaryLabel.setText(
+                "Solve complete. Open the Postprocess tab to inspect VTK results."
+            )
+        else:
+            self.statusLabel.setText(
+                "OOFEM solve failed (exit code {}). See solver output.".format(
+                    exit_code
+                )
+            )
+            QtWidgets.QMessageBox.critical(
+                self,
+                "OOFEM Solver",
+                "OOFEM did not complete successfully. See the solver output log.",
+            )
+        self.refreshResults()
+
+    # ---------------------------
+    # Postprocess
+    # ---------------------------
+    def refreshResults(self):
+        self.resultList.clear()
+        input_file = self.inputFileEdit.text().strip()
+        if not input_file:
+            return []
+        from OOFEMSalomePlugin.OOFEMPost import discover_result_files
+
+        paths = discover_result_files(input_file)
+        for path in paths:
+            item = QtWidgets.QListWidgetItem(os.path.basename(path))
+            item.setToolTip(path)
+            item.setData(Qt.UserRole, path)
+            self.resultList.addItem(item)
+        if paths:
+            self.resultList.setCurrentRow(0)
+        return paths
+
+    def _selectedResultPath(self, visualization_only=False):
+        from OOFEMSalomePlugin.OOFEMPost import preferred_visualization_file
+
+        paths = self.refreshResults()
+        current = self.resultList.currentItem()
+        selected = current.data(Qt.UserRole) if current else None
+        if visualization_only and (
+            not selected or selected.lower().endswith(".out")
+        ):
+            selected = preferred_visualization_file(paths)
+        return selected
+
+    def openSelectedResult(self):
+        try:
+            path = self._selectedResultPath(visualization_only=True)
+            if not path:
+                raise RuntimeError(
+                    "No VTK/PVD/MED result exists yet. Generate and run the VTK preset."
+                )
+            from OOFEMSalomePlugin.OOFEMModule import getModule
+            from OOFEMSalomePlugin.OOFEMPost import open_in_paravis
+
+            open_in_paravis(path, getModule().context)
+            self.statusLabel.setText(
+                "Opened {} in ParaVis.".format(os.path.basename(path))
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.critical(self, "OOFEM Postprocess", str(error))
+            traceback.print_exc()
+
+    def convertSelectedResult(self):
+        try:
+            paths = self.refreshResults()
+            current = self.resultList.currentItem()
+            source = current.data(Qt.UserRole) if current else None
+            if not source or not source.lower().endswith((".vtu", ".vtk")):
+                source = next(
+                    (
+                        path
+                        for path in paths
+                        if path.lower().endswith((".vtu", ".vtk"))
+                    ),
+                    None,
+                )
+            if not source:
+                raise RuntimeError("No single .vtu or .vtk result is available.")
+            default_name = os.path.splitext(source)[0] + ".med"
+            destination, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Convert OOFEM VTK Result to MED", default_name, "MED Files (*.med)"
+            )
+            if not destination:
+                return
+            if not destination.lower().endswith(".med"):
+                destination += ".med"
+
+            from OOFEMSalomePlugin.OOFEMPost import convert_vtk_to_med
+
+            converted = convert_vtk_to_med(source, destination)
+            self.refreshResults()
+            QtWidgets.QMessageBox.information(
+                self, "MED Conversion", "Created:\n{}".format(converted)
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.critical(self, "MED Conversion", str(error))
+            traceback.print_exc()
