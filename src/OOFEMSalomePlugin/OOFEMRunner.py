@@ -34,7 +34,17 @@ def resolve_executable(configured_path=None):
     return None
 
 
-def run_solver(input_file, executable=None, timeout=300):
+def resolve_timeout(timeout=None):
+    """Resolve an explicit timeout or the typed SALOME preference contract."""
+    if timeout is None:
+        timeout = os.environ.get("OOFEM_SOLVER_TIMEOUT", "300")
+    try:
+        return max(1, min(86400, int(timeout)))
+    except (TypeError, ValueError):
+        return 300
+
+
+def run_solver(input_file, executable=None, timeout=None):
     input_file = os.path.abspath(input_file)
     if not os.path.isfile(input_file):
         raise OOFEMSolverError("OOFEM input does not exist: {}".format(input_file))
@@ -52,7 +62,7 @@ def run_solver(input_file, executable=None, timeout=300):
         capture_output=True,
         text=True,
         check=False,
-        timeout=timeout,
+        timeout=resolve_timeout(timeout),
     )
     result = SolverRunResult(
         command=command,

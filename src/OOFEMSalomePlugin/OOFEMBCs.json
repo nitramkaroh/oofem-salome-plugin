@@ -5,8 +5,8 @@
       "display_name": "Nodal Load",
       "apply_to": "nodes",
       "params": [
-        {"key": "dof", "name": "DOF", "type": "int", "default": 1, "description": "Degree of freedom (1=x, 2=y, 3=z)."},
-        {"key": "val", "name": "Value", "type": "float", "default": 0.0, "description": "Load value."}
+        {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Comma-separated degrees of freedom (1=x, 2=y, 3=z)."},
+        {"key": "components", "name": "Components", "type": "float_list", "default": [0.0], "description": "Comma-separated load components matching the DOFs."}
       ]
     },
     {
@@ -14,8 +14,8 @@
       "display_name": "Nodal Displacement",
       "apply_to": "nodes",
       "params": [
-        {"key": "dof", "name": "DOF", "type": "int", "default": 1, "description": "Degree of freedom (1=x, 2=y, 3=z)."},
-        {"key": "val", "name": "Value", "type": "float", "default": 0.0, "description": "Prescribed displacement value."}
+        {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Comma-separated prescribed degrees of freedom (1=x, 2=y, 3=z)."},
+        {"key": "values", "name": "Values", "type": "float_list", "default": [0.0], "description": "Comma-separated prescribed values matching the DOFs."}
       ]
     },
     {
@@ -23,8 +23,8 @@
       "display_name": "Surface Load (on Element Boundary)",
       "apply_to": "element_boundary",
       "params": [
-        {"key": "dof", "name": "DOF", "type": "int", "default": 3, "description": "Direction of load (1=x, 2=y, 3=z)."},
-        {"key": "val", "name": "Value", "type": "float", "default": -1000.0, "description": "Load value (e.g., pressure). Positive is tension, negative is pressure."}
+        {"key": "dofs", "name": "Directions", "type": "int_list", "default": [2], "description": "Comma-separated global load directions (1=x, 2=y, 3=z)."},
+        {"key": "components", "name": "Components", "type": "float_list", "default": [-1000.0], "description": "Comma-separated traction components matching the directions."}
       ]
     }
   ]

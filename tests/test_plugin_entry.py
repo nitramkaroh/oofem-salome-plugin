@@ -12,19 +12,22 @@ from OOFEMSalomePlugin import plugin_entry  # noqa: E402
 
 class PluginEntryTests(unittest.TestCase):
     def test_registration_is_lazy_and_uses_salome_signature(self):
+        module_name = "OOFEMSalomePlugin.OOFEMModule"
+        module_before = sys.modules.get(module_name)
         calls = []
 
         def add_function(*arguments):
             calls.append(arguments)
 
         plugin_entry.register_plugin(add_function)
+        module_after = sys.modules.get(module_name)
 
         self.assertEqual(len(calls), 1)
         name, description, callback = calls[0]
         self.assertEqual(name, "OOFEM")
         self.assertIn("OOFEM", description)
         self.assertIs(callback, plugin_entry.initialize_plugin)
-        self.assertNotIn("OOFEMSalomePlugin.OOFEMModule", sys.modules)
+        self.assertIs(module_after, module_before)
 
     def test_registration_passes_packaged_icon_to_salome(self):
         calls = []
