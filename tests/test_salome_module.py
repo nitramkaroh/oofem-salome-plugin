@@ -1,3 +1,4 @@
+import importlib
 import importlib.util
 import os
 import pathlib
@@ -25,6 +26,66 @@ from OOFEMSalomePlugin.OOFEMSalome import load_smesh_component  # noqa: E402
 
 
 class SalomeLifecycleTests(unittest.TestCase):
+    def test_native_adapter_prefers_own_package_over_loaded_fallback(self):
+        spec = importlib.util.spec_from_file_location(
+            "test_native_OOFEMGUI", MODULE_ADAPTER
+        )
+        adapter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(adapter)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "native"
+            bundled = root / "OOFEMSalomePlugin"
+            fallback = pathlib.Path(directory) / "fallback" / "OOFEMSalomePlugin"
+            bundled.mkdir(parents=True)
+            fallback.mkdir(parents=True)
+            (bundled / "__init__.py").write_text(
+                "ORIGIN = 'native'\n", encoding="utf-8"
+            )
+
+            fake_package = types.ModuleType("OOFEMSalomePlugin")
+            fake_package.__file__ = str(fallback / "__init__.py")
+            fake_package.__path__ = [str(fallback)]
+            fake_child = types.ModuleType("OOFEMSalomePlugin.OOFEMQt")
+            fake_child.__file__ = str(fallback / "OOFEMQt.py")
+
+            package_names = [
+                name
+                for name in sys.modules
+                if name == "OOFEMSalomePlugin"
+                or name.startswith("OOFEMSalomePlugin.")
+            ]
+            previous_modules = {
+                name: sys.modules[name] for name in package_names
+            }
+            previous_path = list(sys.path)
+            for name in package_names:
+                sys.modules.pop(name, None)
+            sys.modules["OOFEMSalomePlugin"] = fake_package
+            sys.modules["OOFEMSalomePlugin.OOFEMQt"] = fake_child
+            try:
+                self.assertTrue(
+                    adapter._prefer_bundled_package(str(root / "OOFEMGUI.py"))
+                )
+                self.assertNotIn(
+                    "OOFEMSalomePlugin.OOFEMQt", sys.modules
+                )
+                loaded = importlib.import_module("OOFEMSalomePlugin")
+                self.assertEqual(loaded.ORIGIN, "native")
+                self.assertEqual(
+                    pathlib.Path(loaded.__file__).resolve(),
+                    (bundled / "__init__.py").resolve(),
+                )
+                self.assertEqual(pathlib.Path(sys.path[0]).resolve(), root.resolve())
+            finally:
+                for name in list(sys.modules):
+                    if name == "OOFEMSalomePlugin" or name.startswith(
+                        "OOFEMSalomePlugin."
+                    ):
+                        sys.modules.pop(name, None)
+                sys.modules.update(previous_modules)
+                sys.path[:] = previous_path
+
     def test_loads_existing_smesh_component_like_asterstudy(self):
         calls = []
         component = object()
@@ -71,7 +132,12 @@ class SalomeLifecycleTests(unittest.TestCase):
     def test_module_adapter_supplies_active_study_context(self):
         calls = []
         study = object()
-        desktop_api = object()
+
+        class DesktopApi:
+            def createRoot(self):
+                calls.append("create_root")
+
+        desktop_api = DesktopApi()
 
         fake_salome = types.ModuleType("salome")
         fake_salome.myStudy = study
@@ -127,6 +193,7 @@ class SalomeLifecycleTests(unittest.TestCase):
                 "preferences",
                 "salome_init",
                 ("activate", desktop_api, study),
+                "create_root",
                 "deactivate",
             ],
         )

@@ -359,16 +359,32 @@ OOFEM_BIN=/absolute/path/to/oofem \
   tests.test_salome_acceptance.RealSalomeAcceptanceTests -v
 ~~~
 
+Run the slower native GUI/HDF lifecycle gate separately:
+
+~~~bash
+OOFEM_GUI_ACCEPTANCE=1 \
+OOFEM_SALOME_ROOT=/absolute/path/to/SALOME-9.16.0-native-UB24.04-SRC \
+  python3 -m unittest \
+  tests.test_salome_gui_acceptance.RealSalomeGuiAcceptanceTests -v
+~~~
+
 This starts the generated `salome-oofem` launcher with a temporary user
 configuration and checks native module discovery and callback-payload
 roundtrip, a separate SALOMEDS AttributeString HDF save/reopen, a real SMESH
 contact model, contact export with element `nlgeo` disabled, execution by the
 selected OOFEM binary, real PVD output, and loading that output through
-SALOME's integrated ParaView `PVDReader`. GUI module/dock activation and
-SALOME's automatic embedding of the callback payload remain part of the
-manual smoke test below.
+SALOME's integrated ParaView `PVDReader`.
 
-### 4. Manual SALOME GUI smoke test
+The opt-in Xvfb gate uses two independent SALOME GUI sessions. The first
+selects the installed OOFEM module, drives the real **File > Save As** dialog,
+checks live dirty-state propagation and **File > Save**, and writes the OOFEM
+light-module payload into HDF. The second opens that HDF through the launcher
+and verifies `openFiles`, the restored widget, contact data, element
+`nlgeo=off`, and the saved solver settings. Each session uses an isolated
+resource file and is shut down explicitly without touching another running
+SALOME instance.
+
+### 4. Manual end-to-end SALOME GUI smoke test
 
 Start SALOME with the installed plugin. In SALOME's Python console, run the
 example using its absolute path:
@@ -504,8 +520,9 @@ implemented with automatic solver setup. The next priorities are:
    jobs after SALOME restarts. Manual stale-run recovery is already available
    through **Mark Interrupted**.
 6. **Release engineering** — one generated version source for CMake/Python/XML
-   and hosted unit/install CI. The serial real-SALOME terminal acceptance is
-   implemented; automated GUI activation and packaging remain.
+   and hosted unit/install CI. Serial real-SALOME terminal acceptance and the
+   two-session GUI/HDF lifecycle gate are implemented; hosted packaging and CI
+   remain.
 
 These priorities follow architectural patterns from
 [AsterStudy](https://gitlab.com/salomemeca/modules/salome-asterstudy) without

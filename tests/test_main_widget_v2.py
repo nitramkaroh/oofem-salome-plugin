@@ -14,7 +14,10 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import tests.test_main_widget as legacy_widget_tests
-from OOFEMSalomePlugin.OOFEMProject import PROJECT_SCHEMA_VERSION
+from OOFEMSalomePlugin.OOFEMProject import (
+    PROJECT_SCHEMA_VERSION,
+    new_project_state,
+)
 
 
 try:
@@ -95,6 +98,44 @@ class MainWidgetV2Tests(unittest.TestCase):
         )
         self.assertEqual(self.widget.crossSectionTable.rowCount(), 1)
         self.assertEqual(self.widget.timeFunctionTable.rowCount(), 1)
+
+    def test_populate_preserves_solver_paths_when_preset_signal_fires(self):
+        state = new_project_state()
+        state["solver_preset"] = "contact-static-vtk"
+        state["oofem_executable"] = "/opt/oofem/bin/oofem"
+        state["last_input_file"] = "/tmp/restored-model.in"
+        state["contacts"] = [
+            {
+                "id": "contact-1",
+                "name": "restored contact",
+                "oofem_type": "StructuralPenaltyContactBC",
+                "master_group": "MASTER",
+                "slave_group": "SLAVE",
+                "time_function_id": "ltf-1",
+                "params": {
+                    "normal_penalty": 10000.0,
+                    "tangential_penalty": 10000.0,
+                    "friction": 0.0,
+                    "algorithm": 0,
+                    "two_pass": False,
+                    "reverse_master": False,
+                    "reverse_slave": False,
+                },
+            }
+        ]
+        events = []
+        self.widget.projectChanged.connect(events.append)
+
+        self.widget.populateAll(study=self.study, state=state)
+
+        self.assertEqual(
+            self.widget.solverPresetCombo.currentData(), "contact-static-vtk"
+        )
+        self.assertEqual(self.widget.oofemExecutableEdit.text(), "/opt/oofem/bin/oofem")
+        self.assertEqual(self.widget.inputFileEdit.text(), "/tmp/restored-model.in")
+        self.assertEqual(state["oofem_executable"], "/opt/oofem/bin/oofem")
+        self.assertEqual(state["last_input_file"], "/tmp/restored-model.in")
+        self.assertEqual(events, [])
 
     def test_explicit_entities_reach_exporter_validation(self):
         self.widget.populateAll(study=self.study)

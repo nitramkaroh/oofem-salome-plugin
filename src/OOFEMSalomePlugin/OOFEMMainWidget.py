@@ -658,11 +658,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateBCs()
         self.populateInitialConditions()
         self.populateContacts()
+        self.oofemExecutableEdit.setText(self.state["oofem_executable"])
+        self.inputFileEdit.setText(self.state["last_input_file"])
         preset_index = self.solverPresetCombo.findData(self.state["solver_preset"])
         if preset_index >= 0:
             self.solverPresetCombo.setCurrentIndex(preset_index)
-        self.oofemExecutableEdit.setText(self.state["oofem_executable"])
-        self.inputFileEdit.setText(self.state["last_input_file"])
         self._ensureContactSolverSetup()
         self.last_export_file = self.state["last_input_file"]
         self.refreshRunHistory()
