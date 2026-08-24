@@ -4,15 +4,19 @@ set -euo pipefail
 
 usage() {
     printf '%s\n' \
-        "Usage: ./install-salome-module.sh --salome SALOME_DIRECTORY" \
+        "Usage: ./install-salome-module.sh --salome SALOME_DIRECTORY [--legacy-global-registration]" \
         "" \
         "Installs OOFEM as a selectable SALOME light module, registers it" \
-        "in SALOME's global/user GUI resources and extra.env.d hook, and creates:" \
-        "  SALOME_DIRECTORY/salome-oofem"
+        "in SALOME's per-user GUI resources and extra.env.d hook, and creates:" \
+        "  SALOME_DIRECTORY/salome-oofem" \
+        "" \
+        "Use --legacy-global-registration only for SALOME builds that cannot" \
+        "discover module resources from the generated launcher."
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 salome_dir=""
+legacy_global_registration=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -24,6 +28,10 @@ while [ "$#" -gt 0 ]; do
             fi
             salome_dir=$2
             shift 2
+            ;;
+        --legacy-global-registration)
+            legacy_global_registration=1
+            shift
             ;;
         -h|--help)
             usage
@@ -51,7 +59,7 @@ extra_env_root="$salome_dir/extra.env.d"
 salome_app_xml="$salome_dir/INSTALL/SALOME/share/salome/resources/salome/SalomeApp.xml"
 integration_xml="$module_source/SalomeApp.integration.xml"
 
-if [ ! -f "$salome_app_xml" ]; then
+if [ "$legacy_global_registration" -eq 1 ] && [ ! -f "$salome_app_xml" ]; then
     printf 'ERROR: SALOME GUI resource file not found: %s\n' "$salome_app_xml" >&2
     exit 1
 fi
@@ -60,12 +68,14 @@ mkdir -p "$python_root" "$resource_root" "$extra_env_root"
 rm -rf -- "$python_root/OOFEMSalomePlugin"
 cp -R -- "$package_source" "$python_root/OOFEMSalomePlugin"
 cp -- "$module_source/OOFEMGUI.py" "$python_root/OOFEMGUI.py"
+cp -- "$module_source/oofem_preferences.py" "$python_root/oofem_preferences.py"
 cp -- "$module_source/register_oofem_user_config.py" "$python_root/register_oofem_user_config.py"
 cp -- "$module_source/SalomeApp.xml" "$resource_root/SalomeApp.xml"
 cp -- "$module_source/oofem.png" "$resource_root/oofem.png"
 cp -- "$module_source/oofem-logo.png" "$resource_root/oofem-logo.png"
 cp -- "$module_source/oofem_env.py" "$extra_env_root/oofem.py"
 
+if [ "$legacy_global_registration" -eq 1 ]; then
 # A complete SALOME application (such as salome_meca with AsterStudy) includes
 # each module section in a GUI resource file known when ResourceMgr starts.
 # A late-added SalomeAppConfig directory is visible to the launch parser but,
@@ -97,6 +107,8 @@ if ! cmp -s -- "$salome_app_xml" "$updated_salome_app"; then
     cp -- "$updated_salome_app" "$salome_app_xml"
 fi
 
+fi
+
 user_config_registrar="$python_root/register_oofem_user_config.py"
 python3 "$user_config_registrar" --salome "$salome_dir"
 
@@ -110,8 +122,14 @@ launcher="$salome_dir/salome-oofem"
 } > "$launcher"
 chmod +x "$launcher"
 
+global_registration="SALOME global GUI resource left unchanged"
+if [ "$legacy_global_registration" -eq 1 ]; then
+    global_registration="Registered compatibility block in: $salome_app_xml"
+fi
+
 printf '%s\n' \
     "OOFEM SALOME module installed in: $module_root" \
-    "Registered in SALOME GUI: $salome_app_xml" \
+    "Registered in per-user SALOME GUI resources" \
     "Registered in SALOME launcher: $extra_env_root/oofem.py" \
+    "$global_registration" \
     "Start it with: $launcher"

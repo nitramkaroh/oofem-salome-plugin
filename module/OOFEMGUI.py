@@ -21,8 +21,10 @@ def initialize():
 
 def activate():
     """Activate OOFEM and load SMESH without requiring a manual module switch."""
+    from oofem_preferences import refresh_environment
     from OOFEMSalomePlugin.OOFEMModule import getModule
 
+    refresh_environment()
     return getModule().activate(_context()) is not None
 
 
@@ -50,7 +52,20 @@ def views():
 
 
 def createPreferences():
-    """Reserved SALOME callback for future module preferences."""
+    """Export typed OOFEM execution settings to SALOME Preferences."""
+    from oofem_preferences import create_preferences
+
+    create_preferences()
+
+
+def preferenceChanged(section, name):
+    """Refresh compatibility settings after an OOFEM preference changes."""
+    del name
+    if section != "OOFEM":
+        return
+    from oofem_preferences import refresh_environment
+
+    refresh_environment()
 
 
 def saveFiles(directory, url=""):

@@ -12,6 +12,8 @@ import stat
 import tempfile
 from xml.dom import Node, minidom
 
+from oofem_preferences import PREFERENCE_DEFAULTS
+
 
 OOFEM_SETTINGS = {
     "name": "OOFEM",
@@ -94,6 +96,18 @@ def _set_parameter(document, section, name: str, value: str) -> bool:
     return True
 
 
+def _set_default_parameter(document, section, name: str, value: str) -> bool:
+    """Add a default without overwriting a value selected by the user."""
+    for child in section.childNodes:
+        if (
+            child.nodeType == Node.ELEMENT_NODE
+            and child.tagName == "parameter"
+            and child.getAttribute("name") == name
+        ):
+            return False
+    return _set_parameter(document, section, name, value)
+
+
 def register(salome_dir: pathlib.Path, config_path: pathlib.Path | None = None):
     salome_dir = salome_dir.resolve()
     config_path = config_path or _default_config_path(salome_dir)
@@ -104,6 +118,9 @@ def register(salome_dir: pathlib.Path, config_path: pathlib.Path | None = None):
     module_section = _section(document, "OOFEM")
     for name, value in OOFEM_SETTINGS.items():
         changed = _set_parameter(document, module_section, name, value) or changed
+    for name, value in PREFERENCE_DEFAULTS.items():
+        text = str(value).lower() if isinstance(value, bool) else str(value)
+        changed = _set_default_parameter(document, module_section, name, text) or changed
 
     resource_path = (
         salome_dir

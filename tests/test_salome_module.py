@@ -80,6 +80,9 @@ class SalomeLifecycleTests(unittest.TestCase):
         fake_salome_pyqt = types.ModuleType("SalomePyQt")
         fake_salome_pyqt.SalomePyQt = lambda: desktop_api
 
+        fake_preferences = types.ModuleType("oofem_preferences")
+        fake_preferences.refresh_environment = lambda: calls.append("preferences")
+
         class Module:
             dock = None
 
@@ -97,6 +100,7 @@ class SalomeLifecycleTests(unittest.TestCase):
         replacements = {
             "salome": fake_salome,
             "SalomePyQt": fake_salome_pyqt,
+            "oofem_preferences": fake_preferences,
             "OOFEMSalomePlugin.OOFEMModule": fake_oofem_module,
         }
         previous = {name: sys.modules.get(name) for name in replacements}
@@ -119,7 +123,12 @@ class SalomeLifecycleTests(unittest.TestCase):
 
         self.assertEqual(
             calls,
-            ["salome_init", ("activate", desktop_api, study), "deactivate"],
+            [
+                "preferences",
+                "salome_init",
+                ("activate", desktop_api, study),
+                "deactivate",
+            ],
         )
 
 
@@ -226,6 +235,9 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 ' <section name="desktop">\n'
                 '  <parameter name="geometry" value="800x600"/>\n'
                 " </section>\n"
+                ' <section name="OOFEM">\n'
+                '  <parameter name="solver_executable" value="/custom/oofem"/>\n'
+                " </section>\n"
                 "</document>\n"
             )
             user_config.write_text(original_user_config, encoding="utf-8")
@@ -249,7 +261,7 @@ class SalomeModuleInstallerTests(unittest.TestCase):
 
             module_root = salome_dir / "INSTALL" / "OOFEM"
             self.assertIn("OOFEM SALOME module installed", first.stdout)
-            self.assertIn("Registered in SALOME GUI", first.stdout)
+            self.assertIn("Registered in per-user SALOME GUI resources", first.stdout)
             self.assertEqual(second.returncode, 0)
             self.assertTrue(
                 (module_root / "bin" / "salome" / "OOFEMGUI.py").is_file()
@@ -263,6 +275,15 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 ).read_text(encoding="utf-8"),
                 USER_CONFIG_REGISTRAR.read_text(encoding="utf-8"),
             )
+            self.assertEqual(
+                (
+                    module_root / "bin" / "salome" / "oofem_preferences.py"
+                ).read_text(encoding="utf-8"),
+                (REPOSITORY_ROOT / "module" / "oofem_preferences.py").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
             self.assertTrue(
                 (
                     module_root
@@ -277,8 +298,12 @@ class SalomeModuleInstallerTests(unittest.TestCase):
             )
             xml = (resource / "SalomeApp.xml").read_text(encoding="utf-8")
             self.assertIn('section name="OOFEM"', xml)
-            self.assertIn('section name="launch"', xml)
-            self.assertIn('name="modules" value="OOFEM"', xml)
+            self.assertNotIn('section name="launch"', xml)
+            self.assertIn('name="solver_executable" value=""', xml)
+            self.assertIn('name="working_directory" value=""', xml)
+            self.assertIn('name="results_directory" value=""', xml)
+            self.assertIn('name="solver_timeout" value="300"', xml)
+            self.assertIn('name="auto_open_paravis" value="false"', xml)
             self.assertIn('value="SalomePyQtGUILight"', xml)
             self.assertIn('value="oofem.png"', xml)
             self.assertTrue((resource / "oofem.png").is_file())
@@ -316,22 +341,12 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 MODULE_ENV.read_text(encoding="utf-8"),
             )
 
-            integrated_resource = salome_resource.read_text(encoding="utf-8")
-            integration = MODULE_INTEGRATION.read_text(encoding="utf-8").strip()
-            self.assertIn(integration, integrated_resource)
             self.assertEqual(
-                integrated_resource.count("BEGIN OOFEM SALOME MODULE"), 1
+                salome_resource.read_text(encoding="utf-8"), original_resource
             )
-            self.assertEqual(
-                integrated_resource.count('section name="OOFEM"'), 1
+            self.assertFalse(
+                (salome_resource.parent / "SalomeApp.xml.before-oofem").exists()
             )
-            self.assertEqual(
-                (salome_resource.parent / "SalomeApp.xml.before-oofem").read_text(
-                    encoding="utf-8"
-                ),
-                original_resource,
-            )
-
             launcher = salome_dir / "salome-oofem"
             launcher_text = launcher.read_text(encoding="utf-8")
             self.assertTrue(launcher.stat().st_mode & stat.S_IXUSR)
@@ -347,12 +362,47 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 'name="library" value="SalomePyQtGUILight"', user_xml
             )
             self.assertIn('name="geometry" value="800x600"', user_xml)
+            self.assertIn(
+                'name="solver_executable" value="/custom/oofem"', user_xml
+            )
+            self.assertIn('name="working_directory" value=""', user_xml)
+            self.assertIn('name="results_directory" value=""', user_xml)
+            self.assertIn('name="solver_timeout" value="300"', user_xml)
+            self.assertIn('name="auto_open_paravis" value="false"', user_xml)
             self.assertIn(str(resource), user_xml)
             self.assertEqual(
                 user_config.with_name(
                     "SalomeApprc.9.16.0.before-oofem"
                 ).read_text(encoding="utf-8"),
                 original_user_config,
+            )
+
+            legacy = subprocess.run(
+                [
+                    "bash",
+                    str(MODULE_INSTALLER),
+                    "--salome",
+                    str(salome_dir),
+                    "--legacy-global-registration",
+                ],
+                cwd=str(REPOSITORY_ROOT),
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertIn("Registered compatibility block", legacy.stdout)
+            integrated_resource = salome_resource.read_text(encoding="utf-8")
+            integration = MODULE_INTEGRATION.read_text(encoding="utf-8").strip()
+            self.assertIn(integration, integrated_resource)
+            self.assertEqual(
+                integrated_resource.count("BEGIN OOFEM SALOME MODULE"), 1
+            )
+            self.assertEqual(
+                (salome_resource.parent / "SalomeApp.xml.before-oofem").read_text(
+                    encoding="utf-8"
+                ),
+                original_resource,
             )
 
 
