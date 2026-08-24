@@ -25,6 +25,18 @@ def load_boundary_condition_templates():
     return _load_object("OOFEMBCs.json").get("boundary_conditions", [])
 
 
+def load_analysis_templates():
+    return _load_object("OOFEMAnalyses.json").get("analyses", [])
+
+
+def load_cross_section_templates():
+    return _load_object("OOFEMCrossSections.json").get("cross_sections", [])
+
+
+def load_time_function_templates():
+    return _load_object("OOFEMTimeFunctions.json").get("time_functions", [])
+
+
 def load_solver_presets():
     presets = _load_object("OOFEMSolverPresets.json").get("solver_presets", [])
     if not presets:

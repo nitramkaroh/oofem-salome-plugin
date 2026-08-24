@@ -746,7 +746,7 @@ class ExporterValidationTests(unittest.TestCase):
         self.assertIn("node 1 coords 2 0 0", model)
         self.assertIn("TrPlaneStress2d 1 nodes 3 1 2 3", model)
         self.assertIn("ConstantEdgeLoad", model)
-        self.assertRegex(model, r"Set \d+ elementBoundaries 2 1 2")
+        self.assertRegex(model, r"Set \d+ elementEdges 2 1 2")
 
     def test_translates_tetra_face_to_ltrspace_boundary_number(self):
         exporter = OOFEMExporter(
@@ -810,16 +810,29 @@ class OOFEMSolverIntegrationTests(unittest.TestCase):
             )
             return input_path.with_suffix(".out").read_text(encoding="utf-8")
 
-    def _assert_dof1_displacement(self, output, node_number, expected, places=10):
+    def _displacement(self, output, node_number, dof=1):
         node = re.search(
             r"Node\s+{}\s+\([^)]*\):(.*?)(?:Node|Element output:)".format(node_number),
             output,
             re.S,
         )
         self.assertIsNotNone(node, output)
-        displacement = re.search(r"dof\s+1\s+d\s+([+\-0-9.eE]+)", node.group(1))
+        displacement = re.search(
+            r"dof\s+{}\s+d\s+([+\-0-9.eE]+)".format(dof), node.group(1)
+        )
         self.assertIsNotNone(displacement, node.group(1))
-        self.assertAlmostEqual(float(displacement.group(1)), expected, places=places)
+        return float(displacement.group(1))
+
+    def _assert_displacement(self, output, node_number, dof, expected, places=10):
+        self.assertAlmostEqual(
+            self._displacement(output, node_number, dof), expected, places=places
+        )
+
+    def _assert_nonzero_displacement(self, output, node_number, dof=1):
+        self.assertGreater(abs(self._displacement(output, node_number, dof)), 1.0e-12)
+
+    def _assert_dof1_displacement(self, output, node_number, expected, places=10):
+        self._assert_displacement(output, node_number, 1, expected, places)
 
     def test_exported_truss_solves_to_analytical_displacement(self):
         output = self.solve(
@@ -829,31 +842,44 @@ class OOFEMSolverIntegrationTests(unittest.TestCase):
         self._assert_dof1_displacement(output, 2, 0.025)
 
     def test_exported_plane_stress_edge_load_solves(self):
-        self.solve(
+        output = self.solve(
             plane_stress_model,
-            ["TrPlaneStress2d 1 nodes 3", "ConstantEdgeLoad"],
+            [
+                "TrPlaneStress2d 1 nodes 3",
+                "ConstantEdgeLoad",
+                "elementEdges 2 1 2",
+            ],
         )
+        self._assert_dof1_displacement(output, 2, 1.41421356e-3)
+        self._assert_dof1_displacement(output, 3, 3.53553391e-3)
 
     def test_exported_plane_stress_quad_edge_load_solves(self):
-        self.solve(
+        output = self.solve(
             plane_stress_quad_model,
-            ["PlaneStress2d 1 nodes 4", "ConstantEdgeLoad"],
+            ["PlaneStress2d 1 nodes 4", "ConstantEdgeLoad", "elementEdges"],
         )
+        self._assert_nonzero_displacement(output, 2)
 
     def test_exported_tetra_surface_load_solves(self):
-        self.solve(tetra_model, ["LTRSpace 1 nodes 4", "ConstantSurfaceLoad"])
+        output = self.solve(
+            tetra_model,
+            ["LTRSpace 1 nodes 4", "ConstantSurfaceLoad", "elementBoundaries"],
+        )
+        self._assert_nonzero_displacement(output, 4, dof=3)
 
     def test_exported_quad1_plane_strain_edge_load_solves(self):
-        self.solve(
+        output = self.solve(
             quad1_plane_strain_model,
-            ["Quad1PlaneStrain 1 nodes 4", "ConstantEdgeLoad"],
+            ["Quad1PlaneStrain 1 nodes 4", "ConstantEdgeLoad", "elementEdges"],
         )
+        self._assert_nonzero_displacement(output, 2)
 
     def test_exported_qplanestrain_edge_load_solves(self):
-        self.solve(
+        output = self.solve(
             qplanestrain_model,
-            ["QPlaneStrain 1 nodes 8", "ConstantEdgeLoad"],
+            ["QPlaneStrain 1 nodes 8", "ConstantEdgeLoad", "elementEdges"],
         )
+        self._assert_nonzero_displacement(output, 2)
 
     def test_exported_lspace_solves_to_analytical_displacement(self):
         output = self.solve(
@@ -884,21 +910,28 @@ class OOFEMSolverIntegrationTests(unittest.TestCase):
         self._assert_dof1_displacement(output, 2, 0.025)
 
     def test_exported_ogden_hyperelastic_quad_solves(self):
-        self.solve(
+        output = self.solve(
             ogden_quad_model,
-            ["ogdencompressiblemat 1", "Quad1PlaneStrain 1 nodes 4 1 2 3 4 nlgeo 1"],
+            [
+                "ogdencompressiblemat 1",
+                "Quad1PlaneStrain 1 nodes 4 1 2 3 4 nlgeo 1",
+                "elementEdges",
+            ],
             solver_settings={"vtk": True, "nlgeom": True, "nsteps": 5},
         )
+        self._assert_nonzero_displacement(output, 2)
 
     def test_exported_mooney_rivlin_hyperelastic_quad_solves(self):
-        self.solve(
+        output = self.solve(
             mooney_rivlin_quad_model,
             [
                 "mooneyrivlincompressiblemat 1",
                 "Quad1PlaneStrain 1 nodes 4 1 2 3 4 nlgeo 1",
+                "elementEdges",
             ],
             solver_settings={"vtk": True, "nlgeom": True, "nsteps": 5},
         )
+        self._assert_nonzero_displacement(output, 2)
 
 
 if __name__ == "__main__":

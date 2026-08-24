@@ -1,7 +1,7 @@
 {
   "analyses": [
     {
-      "oofem_name": "StaticStructural",
+      "oofem_name": "staticstructural",
       "display_name": "Static Structural",
       "description": "Nonlinear static structural analysis.",
       "params": [
@@ -23,8 +23,8 @@
       ]
     },
     {
-      "oofem_name": "LinearStatics",
-      "display_name": "Linear Statics",
+      "oofem_name": "linearstatic",
+      "display_name": "Linear Static",
       "description": "Linear static analysis with multiple load cases.",
       "params": [
         {
@@ -37,7 +37,7 @@
       ]
     },
     {
-      "oofem_name": "EigenValueDynamic",
+      "oofem_name": "eigenvaluedynamic",
       "display_name": "Eigenvalue Dynamic",
       "description": "Computes eigenvalues and eigenvectors.",
       "params": [
