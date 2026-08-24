@@ -1,5 +1,6 @@
 """Validated SALOME mesh to OOFEM input writer."""
 
+import math
 import os
 import tempfile
 
@@ -10,6 +11,11 @@ except ImportError:
     SMESH = None
 
 from OOFEMSalomePlugin.OOFEMModule import getModule
+from OOFEMSalomePlugin.OOFEMContact import (
+    canonical_contact,
+    contact_element_spec,
+    orient_contact_nodes,
+)
 
 
 class OOFEMValidationError(ValueError):
@@ -70,6 +76,7 @@ class OOFEMExporter:
         "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
         "nlgeom": False,
     }
+    ELEMENT_NLGEO_MODES = {"inherit", "on", "off"}
 
     def __init__(
         self,
@@ -82,6 +89,8 @@ class OOFEMExporter:
         cross_sections=None,
         time_functions=None,
         analysis=None,
+        initial_conditions=None,
+        contacts=None,
     ):
         self.mesh = mesh
         self.elem_map = dict(elem_map or {})
@@ -100,8 +109,11 @@ class OOFEMExporter:
         else:
             self.time_functions = list(time_functions)
         self.analysis = dict(analysis or {})
+        self.initial_conditions = list(initial_conditions or [])
+        self.contacts = list(contacts or [])
         self.bc_templates = {
-            template["oofem_name"]: template for template in (bc_templates or [])
+            self._boundary_type_key(template["oofem_name"]): template
+            for template in (bc_templates or [])
         }
         self.solver_settings = dict(self.DEFAULT_SOLVER_SETTINGS)
         if solver_settings:
@@ -129,6 +141,42 @@ class OOFEMExporter:
     @staticmethod
     def _format_number(value):
         return "{:g}".format(float(value))
+
+    @staticmethod
+    def _boundary_type_key(value):
+        """Return the canonical, case-insensitive key for a load type."""
+        key = str(value or "").strip().casefold()
+        if key == "structtemperatureload":
+            return "structuraltemperatureload"
+        return key
+
+    @staticmethod
+    def _coerce_dof_list(value):
+        """Parse DOFs without silently truncating fractions or accepting bools."""
+        if isinstance(value, str):
+            value = value.replace(",", " ").split()
+        elif not isinstance(value, (list, tuple)):
+            value = [value]
+
+        dofs = []
+        for item in value:
+            if isinstance(item, bool):
+                raise ValueError("boolean DOF values are not allowed")
+            if isinstance(item, int):
+                dof = item
+            elif isinstance(item, float):
+                if not math.isfinite(item) or not item.is_integer():
+                    raise ValueError("fractional or non-finite DOF value")
+                dof = int(item)
+            elif isinstance(item, str):
+                try:
+                    dof = int(item.strip(), 10)
+                except (TypeError, ValueError):
+                    raise ValueError("non-integer DOF value")
+            else:
+                raise ValueError("non-integer DOF value")
+            dofs.append(dof)
+        return dofs
 
     def _build_salome_type_map(self):
         if not SMESH:
@@ -250,27 +298,34 @@ class OOFEMExporter:
             "3d": 3,
         }[self.domain_type]
 
-    def _add_set(self, group_name, keyword, values):
-        key = (group_name, keyword)
+    def _add_set(self, group_name, keyword, values, internal=False):
+        namespace = "internal" if internal else "salome"
+        key = (namespace, group_name, keyword)
         if key in self._set_key_to_id:
             return self._set_key_to_id[key]
         values = list(values)
         set_id = len(self._groups_to_export) + 1
         self._set_key_to_id[key] = set_id
-        self.group_name_to_set_id[group_name] = set_id
+        if not internal:
+            self.group_name_to_set_id[group_name] = set_id
         self._groups_to_export.append((set_id, group_name, keyword, values))
         return set_id
 
     def _build_boundary_to_parent_map(self):
         boundary_map = {}
+        self.boundary_oriented_nodes = {}
         for salome_element_id in self.element_ids:
             element_type = self._get_oofem_element_type(salome_element_id).lower()
             boundaries = self.BOUNDARY_NODE_INDICES.get(element_type, ())
             connectivity = self.element_connectivity[salome_element_id]
             for local_number, indices in enumerate(boundaries, start=1):
-                nodes = tuple(sorted(connectivity[index] for index in indices))
+                oriented_nodes = tuple(connectivity[index] for index in indices)
+                nodes = tuple(sorted(oriented_nodes))
                 boundary_map.setdefault(nodes, []).append(
                     (self.element_id_map[salome_element_id], local_number)
+                )
+                self.boundary_oriented_nodes.setdefault(nodes, []).append(
+                    oriented_nodes
                 )
         return boundary_map
 
@@ -304,6 +359,307 @@ class OOFEMExporter:
         for element_id, boundary_number in sorted(set(pairs)):
             flattened.extend((element_id, boundary_number))
         return flattened
+
+    def _contact_surface_for_group(self, group, reverse, errors):
+        """Create or reuse contact elements and one StructuralFEContactSurface."""
+        group_name = group.GetName()
+        cache_key = (group_name, bool(reverse))
+        existing = self._contact_surface_cache.get(cache_key)
+        if existing is not None:
+            return existing
+
+        if self._enum_value(group.GetType()) == self._node_group_type():
+            errors.append(
+                "Contact boundary group '{}' must contain edge/face elements, "
+                "not nodes.".format(group_name)
+            )
+            return None
+
+        boundary_ids = sorted(set(group.GetIDs()))
+        if not boundary_ids:
+            errors.append("Contact boundary group '{}' is empty.".format(group_name))
+            return None
+
+        staged_elements = []
+        surface_errors = []
+        for boundary_id in boundary_ids:
+            try:
+                salome_nodes = self._get_element_nodes(boundary_id)
+            except Exception as error:
+                surface_errors.append(
+                    "Could not read contact boundary element {} in group '{}': {}.".format(
+                        boundary_id, group_name, error
+                    )
+                )
+                continue
+
+            missing_nodes = sorted(
+                node_id
+                for node_id in salome_nodes
+                if node_id not in self.node_id_map
+            )
+            if missing_nodes:
+                surface_errors.append(
+                    "Contact boundary element {} in group '{}' contains nodes outside "
+                    "the exported material domain: {}.".format(
+                        boundary_id,
+                        group_name,
+                        ", ".join(map(str, missing_nodes[:8])),
+                    )
+                )
+                continue
+
+            boundary_key = tuple(sorted(salome_nodes))
+            parents = self.boundary_to_parent_map.get(boundary_key, ())
+            if not parents:
+                surface_errors.append(
+                    "Contact boundary element {} in group '{}' does not match a "
+                    "boundary of an exported material element.".format(
+                        boundary_id, group_name
+                    )
+                )
+                continue
+            if len(parents) != 1:
+                surface_errors.append(
+                    "Contact boundary element {} in group '{}' is shared by {} "
+                    "exported material elements; contact requires an exterior boundary.".format(
+                        boundary_id, group_name, len(parents)
+                    )
+                )
+                continue
+
+            # A standalone SMESH boundary element may have arbitrary local
+            # connectivity. Use the owning continuum element's verified local
+            # facet order so normals are consistent and outward-facing for a
+            # valid parent element. Explicit reverse options are applied next.
+            parent_facets = self.boundary_oriented_nodes.get(boundary_key, ())
+            if len(parent_facets) != 1:
+                surface_errors.append(
+                    "Contact boundary element {} in group '{}' has ambiguous "
+                    "parent-facet orientation.".format(boundary_id, group_name)
+                )
+                continue
+            salome_nodes = parent_facets[0]
+
+            try:
+                keyword, nip = contact_element_spec(
+                    self.domain_type, len(salome_nodes)
+                )
+                connectivity = orient_contact_nodes(
+                    [self.node_id_map[node_id] for node_id in salome_nodes],
+                    reverse,
+                )
+            except ValueError as error:
+                surface_errors.append(
+                    "Contact boundary element {} in group '{}': {}.".format(
+                        boundary_id, group_name, error
+                    )
+                )
+                continue
+
+            record_id = (
+                len(self.element_ids)
+                + len(self._contact_elements_to_export)
+                + len(staged_elements)
+                + 1
+            )
+            staged_elements.append(
+                {
+                    "id": record_id,
+                    "keyword": keyword,
+                    "connectivity": connectivity,
+                    "nip": nip,
+                    "salome_boundary_id": boundary_id,
+                }
+            )
+
+        if surface_errors:
+            errors.extend(surface_errors)
+            return None
+        if not staged_elements:
+            errors.append(
+                "Contact boundary group '{}' has no supported contact elements.".format(
+                    group_name
+                )
+            )
+            return None
+
+        self._contact_elements_to_export.extend(staged_elements)
+        internal_group_name = "__contact_surface__:{}:{}".format(
+            group_name, "reversed" if reverse else "forward"
+        )
+        set_id = self._add_set(
+            internal_group_name,
+            "elements",
+            [record["id"] for record in staged_elements],
+            internal=True,
+        )
+        surface_id = len(self._contact_surfaces_to_export) + 1
+        if set_id != surface_id:
+            errors.append(
+                "Internal contact export error: surface {} must use Set {}, got Set {}.".format(
+                    surface_id, surface_id, set_id
+                )
+            )
+            return None
+        self._contact_surfaces_to_export.append(
+            {
+                "id": surface_id,
+                "set_id": set_id,
+                "group_name": group_name,
+                "reverse": bool(reverse),
+            }
+        )
+        self._contact_surface_cache[cache_key] = surface_id
+        return surface_id
+
+    def _prepare_contacts(self, groups, errors):
+        self._contacts_to_export = []
+        self._contact_conditions_to_export = []
+        self._contact_elements_to_export = []
+        self._contact_surfaces_to_export = []
+        self._contact_surface_cache = {}
+        self._contact_cross_section_id = None
+        self._contact_material_id = None
+        if not self.contacts:
+            return
+
+        configured_analysis = (
+            self.analysis.get("oofem_type")
+            or self.analysis.get("type")
+            or self.solver_settings.get("engng_model", "StaticStructural")
+        )
+        if str(configured_analysis).strip().casefold() != "staticstructural":
+            errors.append(
+                "Structural contact requires the StaticStructural engineering model."
+            )
+        seen_ids = set()
+        seen_physical_pairs = []
+        for source_contact in self.contacts:
+            try:
+                contact = canonical_contact(source_contact, self.domain_type)
+            except ValueError as error:
+                errors.append(str(error) + ".")
+                continue
+
+            contact_id = contact.get("id")
+            if not isinstance(contact_id, str) or not contact_id.strip():
+                errors.append(
+                    "Contact '{}' has no internal ID.".format(contact["name"])
+                )
+                continue
+            if contact_id in seen_ids:
+                errors.append(
+                    "Contact ID '{}' is used more than once.".format(contact_id)
+                )
+                continue
+            seen_ids.add(contact_id)
+
+            master_group = groups.get(contact["master_group"])
+            slave_group = groups.get(contact["slave_group"])
+            if master_group is None:
+                errors.append(
+                    "Contact '{}' references missing master boundary group '{}'.".format(
+                        contact["name"], contact["master_group"]
+                    )
+                )
+            if slave_group is None:
+                errors.append(
+                    "Contact '{}' references missing slave boundary group '{}'.".format(
+                        contact["name"], contact["slave_group"]
+                    )
+                )
+            if master_group is None or slave_group is None:
+                continue
+
+            try:
+                master_facets = {
+                    tuple(sorted(self._get_element_nodes(element_id)))
+                    for element_id in master_group.GetIDs()
+                }
+                slave_facets = {
+                    tuple(sorted(self._get_element_nodes(element_id)))
+                    for element_id in slave_group.GetIDs()
+                }
+            except Exception:
+                # The surface builder below reports the precise unreadable
+                # element and group; do not duplicate that diagnostic here.
+                master_facets = set()
+                slave_facets = set()
+            overlapping_facets = master_facets & slave_facets
+            if overlapping_facets:
+                errors.append(
+                    "Contact '{}' master and slave groups contain the same "
+                    "boundary facet(s); self-contact is not supported.".format(
+                        contact["name"]
+                    )
+                )
+                continue
+
+            duplicate_name = None
+            for previous_master, previous_slave, previous_name in (
+                seen_physical_pairs
+            ):
+                same_direction = bool(master_facets & previous_master) and bool(
+                    slave_facets & previous_slave
+                )
+                reverse_direction = bool(master_facets & previous_slave) and bool(
+                    slave_facets & previous_master
+                )
+                if same_direction or reverse_direction:
+                    duplicate_name = previous_name
+                    break
+            if duplicate_name is not None:
+                errors.append(
+                    "Contact '{}' overlaps physical pair '{}'; stacking contact "
+                    "conditions would duplicate the penalty contribution. Use "
+                    "one pair and its two-pass option instead.".format(
+                        contact["name"], duplicate_name
+                    )
+                )
+                continue
+
+            master_surface = self._contact_surface_for_group(
+                master_group,
+                contact["params"]["reverse_master"],
+                errors,
+            )
+            slave_surface = self._contact_surface_for_group(
+                slave_group,
+                contact["params"]["reverse_slave"],
+                errors,
+            )
+            if master_surface is None or slave_surface is None:
+                continue
+            seen_physical_pairs.append(
+                (master_facets, slave_facets, contact["name"])
+            )
+
+            default_time_function_id = (
+                self._time_functions_to_export[0].get("id")
+                if self._time_functions_to_export
+                else None
+            )
+            function_id = contact.get("time_function_id") or default_time_function_id
+            function_number = self.time_function_internal_id_to_oofem_id.get(
+                function_id
+            )
+            if function_number is None:
+                errors.append(
+                    "Contact '{}' references missing time function '{}'.".format(
+                        contact["name"], function_id
+                    )
+                )
+                continue
+
+            self._contacts_to_export.append(contact)
+            self._contact_conditions_to_export.append(
+                (contact, master_surface, slave_surface, function_number)
+            )
+            if contact["params"]["two_pass"]:
+                self._contact_conditions_to_export.append(
+                    (contact, slave_surface, master_surface, function_number)
+                )
 
     @staticmethod
     def _coerce_float_list(value):
@@ -360,6 +716,28 @@ class OOFEMExporter:
                         )
                     )
                     continue
+
+                element_options = cross_section.get("element_options")
+                if element_options is None:
+                    element_options = {}
+                if not isinstance(element_options, dict):
+                    errors.append(
+                        "Cross section '{}' element_options must be an object.".format(
+                            cross_section_name
+                        )
+                    )
+                else:
+                    nlgeo_mode = str(
+                        element_options.get("nlgeo", "inherit")
+                    ).strip().casefold()
+                    if nlgeo_mode not in self.ELEMENT_NLGEO_MODES:
+                        errors.append(
+                            "Cross section '{}' has invalid element nlgeo mode "
+                            "'{}'; use inherit, on, or off.".format(
+                                cross_section_name,
+                                element_options.get("nlgeo"),
+                            )
+                        )
 
                 group_name = cross_section.get("assigned_group")
                 material_id = cross_section.get("material_id")
@@ -491,28 +869,112 @@ class OOFEMExporter:
 
     def _boundary_dofs_and_values(self, boundary_condition):
         bc_type = boundary_condition.get("oofem_type")
-        parameters = boundary_condition.get("params", {})
-        raw_dofs = parameters.get("dofs")
-        if raw_dofs is None:
-            raw_dofs = [parameters.get("dof", 1)]
-        if not isinstance(raw_dofs, (list, tuple)):
-            raw_dofs = [raw_dofs]
+        bc_type_key = self._boundary_type_key(bc_type)
+        parameters = boundary_condition.get("params") or {}
+        boundary_name = boundary_condition.get("name", "Unnamed")
+        if not isinstance(parameters, dict):
+            raise OOFEMValidationError(
+                [
+                    "Boundary condition '{}' parameters must be an object.".format(
+                        boundary_name
+                    )
+                ]
+            )
 
-        value_key = "values" if bc_type == "Displacement" else "components"
-        raw_values = parameters.get(value_key)
+        if bc_type_key == "structuraltemperatureload":
+            try:
+                values = self._coerce_float_list(parameters.get("components"))
+            except (TypeError, ValueError) as error:
+                raise OOFEMValidationError(
+                    [
+                        "Boundary condition '{}' has invalid temperature "
+                        "components: {}.".format(boundary_name, error)
+                    ]
+                )
+            if any(not math.isfinite(value) for value in values):
+                raise OOFEMValidationError(
+                    [
+                        "Boundary condition '{}' temperature components must "
+                        "be finite numbers.".format(boundary_name)
+                    ]
+                )
+            if len(values) not in (1, 2):
+                raise OOFEMValidationError(
+                    [
+                        "Boundary condition '{}' needs one temperature "
+                        "increment component and at most one optional "
+                        "through-thickness gradient component.".format(
+                            boundary_name
+                        )
+                    ]
+                )
+            if len(values) == 2 and values[1] != 0.0:
+                raise OOFEMValidationError(
+                    [
+                        "Boundary condition '{}' uses a non-zero structural "
+                        "temperature-gradient component, which is not supported "
+                        "by the plugin's current truss/continuum element families.".format(
+                            boundary_name
+                        )
+                    ]
+                )
+            if len(values) == 1:
+                values.append(0.0)
+            return [], values
+
+        raw_values = parameters.get("components")
+        if bc_type_key == "displacement":
+            raw_values = parameters.get("values")
+        if raw_values is None and "val" in parameters:
+            raw_values = [parameters.get("val")]
+        if raw_values is None and bc_type_key == "deadweight":
+            raise OOFEMValidationError(
+                [
+                    "Boundary condition '{}' needs body-load components.".format(
+                        boundary_name
+                    )
+                ]
+            )
         if raw_values is None:
-            raw_values = [parameters.get("val", 0.0)]
+            raw_values = [0.0]
         if not isinstance(raw_values, (list, tuple)):
             raw_values = [raw_values]
 
+        raw_dofs = parameters.get("dofs")
+        if raw_dofs is None:
+            if (
+                bc_type_key == "deadweight"
+                and len(raw_values) == self._domain_dof_count()
+            ):
+                raw_dofs = list(range(1, self._domain_dof_count() + 1))
+            else:
+                raw_dofs = [parameters.get("dof", 1)]
         try:
-            dofs = [int(item) for item in raw_dofs]
+            dofs = self._coerce_dof_list(raw_dofs)
+        except (TypeError, ValueError):
+            raise OOFEMValidationError(
+                [
+                    "Boundary condition '{}' DOFs must be integers; boolean "
+                    "and fractional values are not allowed.".format(
+                        boundary_name
+                    )
+                ]
+            )
+        try:
             values = [float(item) for item in raw_values]
         except (TypeError, ValueError):
             raise OOFEMValidationError(
                 [
-                    "Boundary condition '{}' has non-numeric DOFs or values.".format(
-                        boundary_condition.get("name", "Unnamed")
+                    "Boundary condition '{}' values must be numeric.".format(
+                        boundary_name
+                    )
+                ]
+            )
+        if any(not math.isfinite(value) for value in values):
+            raise OOFEMValidationError(
+                [
+                    "Boundary condition '{}' values must be finite numbers.".format(
+                        boundary_name
                     )
                 ]
             )
@@ -545,11 +1007,322 @@ class OOFEMExporter:
                     )
                 ]
             )
-        if bc_type == "SurfaceLoad":
+        if bc_type_key in ("surfaceload", "deadweight"):
             values_by_dof = dict(zip(dofs, values))
             dofs = list(range(1, dof_count + 1))
             values = [values_by_dof.get(dof, 0.0) for dof in dofs]
         return dofs, values
+
+    def _validate_element_load_materials(self, boundary_condition, group):
+        load_key = self._boundary_type_key(boundary_condition.get("oofem_type"))
+        if load_key == "deadweight":
+            parameter_key = "d"
+            requirement = "density parameter 'd' must be a positive finite number"
+            validator = lambda value: value > 0.0
+        elif load_key == "structuraltemperatureload":
+            parameter_key = "alpha"
+            requirement = (
+                "thermal expansion parameter 'alpha' must be a non-zero finite number"
+            )
+            validator = lambda value: value != 0.0
+        else:
+            return []
+
+        errors = []
+        checked_materials = set()
+        for element_id in group.GetIDs():
+            for assignment_group in self.elem_to_groups.get(element_id, []):
+                material = self.group_to_mat.get(assignment_group)
+                if material is None:
+                    continue
+                material_marker = (
+                    material.get("id")
+                    or assignment_group
+                )
+                if material_marker in checked_materials:
+                    continue
+                checked_materials.add(material_marker)
+                parameters = material.get("params") or {}
+                raw_value = (
+                    parameters.get(parameter_key)
+                    if isinstance(parameters, dict)
+                    else None
+                )
+                try:
+                    numeric_value = float(raw_value)
+                except (TypeError, ValueError, OverflowError):
+                    numeric_value = None
+                if (
+                    isinstance(raw_value, bool)
+                    or numeric_value is None
+                    or not math.isfinite(numeric_value)
+                    or not validator(numeric_value)
+                ):
+                    errors.append(
+                        "Boundary condition '{}' targets element {} with material "
+                        "'{}'; its {}.".format(
+                            boundary_condition.get("name", "Unnamed"),
+                            element_id,
+                            material.get("name") or material_marker,
+                            requirement,
+                        )
+                    )
+        return errors
+
+    def _prepare_initial_conditions(self, groups, errors):
+        self._initial_conditions_to_export = []
+        used_ids = set()
+        assigned_node_dofs = {}
+        prescribed_node_dofs = {}
+        allowed_modes = ("u", "v", "a")
+        domain_dof_count = self._domain_dof_count()
+        configured_analysis = (
+            self.analysis.get("oofem_type")
+            or self.analysis.get("type")
+            or self.solver_settings.get("engng_model", "StaticStructural")
+        )
+        analysis_key = str(configured_analysis or "").strip().casefold()
+        non_transient_structural_analyses = {
+            "staticstructural",
+            "linearstatic",
+            "linearstatics",
+            "eigenvaluedynamic",
+        }
+
+        for boundary_condition, _set_id, _apply_to, dofs, _, _ in (
+            self._boundary_conditions_to_export
+        ):
+            if (
+                self._boundary_type_key(boundary_condition.get("oofem_type"))
+                != "displacement"
+            ):
+                continue
+            group = groups.get(boundary_condition.get("assigned_group"))
+            if group is None:
+                continue
+            for salome_node_id in group.GetIDs():
+                oofem_node_id = self.node_id_map.get(salome_node_id)
+                if oofem_node_id is None:
+                    continue
+                for dof in dofs:
+                    prescribed_node_dofs[(oofem_node_id, dof)] = (
+                        boundary_condition.get("name", "Unnamed")
+                    )
+
+        for initial_condition in self.initial_conditions:
+            if not isinstance(initial_condition, dict):
+                errors.append("Initial condition records must be objects.")
+                continue
+
+            condition_name = initial_condition.get("name", "Unnamed")
+            condition_id = initial_condition.get("id")
+            if not condition_id:
+                errors.append(
+                    "Initial condition '{}' has no internal ID.".format(
+                        condition_name
+                    )
+                )
+                continue
+            if condition_id in used_ids:
+                errors.append(
+                    "Initial condition ID '{}' is used more than once.".format(
+                        condition_id
+                    )
+                )
+                continue
+            used_ids.add(condition_id)
+
+            condition_type = str(
+                initial_condition.get("oofem_type", "InitialCondition")
+            ).lower()
+            if condition_type != "initialcondition":
+                errors.append(
+                    "Initial condition '{}' uses unsupported type '{}'.".format(
+                        condition_name, initial_condition.get("oofem_type")
+                    )
+                )
+                continue
+
+            group_name = initial_condition.get("assigned_group")
+            group = groups.get(group_name)
+            if group is None:
+                errors.append(
+                    "Initial condition '{}' references missing group '{}'.".format(
+                        condition_name, group_name
+                    )
+                )
+                continue
+            if self._enum_value(group.GetType()) != self._node_group_type():
+                errors.append(
+                    "Initial condition '{}' requires a node group.".format(
+                        condition_name
+                    )
+                )
+                continue
+
+            outside = sorted(set(group.GetIDs()) - set(self.node_ids))
+            if outside:
+                errors.append(
+                    "Initial-condition node group '{}' contains nodes outside "
+                    "the exported material domain: {}.".format(
+                        group_name, ", ".join(map(str, outside[:8]))
+                    )
+                )
+                continue
+
+            parameters = initial_condition.get("params") or {}
+            if not isinstance(parameters, dict):
+                errors.append(
+                    "Initial condition '{}' parameters must be an object.".format(
+                        condition_name
+                    )
+                )
+                continue
+            raw_dofs = parameters.get("dofs")
+            if raw_dofs is None and "dof" in parameters:
+                raw_dofs = [parameters.get("dof")]
+            try:
+                dofs = self._coerce_dof_list(raw_dofs)
+            except (TypeError, ValueError):
+                errors.append(
+                    "Initial condition '{}' DOFs must be integers; boolean "
+                    "and fractional values are not allowed.".format(
+                        condition_name
+                    )
+                )
+                continue
+            if not dofs:
+                errors.append(
+                    "Initial condition '{}' needs a non-empty integer DOF list.".format(
+                        condition_name
+                    )
+                )
+                continue
+            if len(set(dofs)) != len(dofs):
+                errors.append(
+                    "Initial condition '{}' contains a duplicate DOF.".format(
+                        condition_name
+                    )
+                )
+                continue
+            invalid_dofs = [
+                dof for dof in dofs if dof < 1 or dof > domain_dof_count
+            ]
+            if invalid_dofs:
+                errors.append(
+                    "Initial condition '{}' uses DOF {}, but domain '{}' has {} "
+                    "translational DOFs.".format(
+                        condition_name,
+                        invalid_dofs[0],
+                        self.domain_type,
+                        domain_dof_count,
+                    )
+                )
+                continue
+
+            raw_conditions = parameters.get("conditions")
+            if raw_conditions is None and "value" in parameters:
+                raw_conditions = {
+                    str(parameters.get("mode", "u")).lower(): parameters["value"]
+                }
+            if not isinstance(raw_conditions, dict) or not raw_conditions:
+                errors.append(
+                    "Initial condition '{}' needs a non-empty conditions "
+                    "object.".format(condition_name)
+                )
+                continue
+
+            unknown_modes = sorted(set(raw_conditions) - set(allowed_modes))
+            if unknown_modes:
+                errors.append(
+                    "Initial condition '{}' uses unsupported value mode '{}'; "
+                    "supported modes are u, v, and a.".format(
+                        condition_name, unknown_modes[0]
+                    )
+                )
+                continue
+            try:
+                conditions = [
+                    (mode, float(raw_conditions[mode]))
+                    for mode in allowed_modes
+                    if mode in raw_conditions
+                ]
+            except (TypeError, ValueError):
+                errors.append(
+                    "Initial condition '{}' has a non-numeric condition value.".format(
+                        condition_name
+                    )
+                )
+                continue
+            if any(not math.isfinite(value) for _mode, value in conditions):
+                errors.append(
+                    "Initial condition '{}' values must be finite numbers.".format(
+                        condition_name
+                    )
+                )
+                continue
+            if (
+                analysis_key in non_transient_structural_analyses
+                and any(value != 0.0 for _mode, value in conditions)
+            ):
+                errors.append(
+                    "Initial condition '{}' contains non-zero values, but analysis "
+                    "'{}' has no transient dynamics; OOFEM would ignore them.".format(
+                        condition_name, configured_analysis
+                    )
+                )
+                continue
+
+            translated_nodes = sorted(
+                {self.node_id_map[node_id] for node_id in group.GetIDs()}
+            )
+            if not translated_nodes:
+                errors.append(
+                    "Initial condition '{}' targets an empty node group.".format(
+                        condition_name
+                    )
+                )
+                continue
+            collisions = [
+                (node_id, dof, assigned_node_dofs[(node_id, dof)])
+                for node_id in translated_nodes
+                for dof in dofs
+                if (node_id, dof) in assigned_node_dofs
+            ]
+            if collisions:
+                node_id, dof, previous_name = collisions[0]
+                errors.append(
+                    "Initial condition '{}' overlaps '{}' on exported node {} "
+                    "DOF {}; one OOFEM DOF can have only one initial "
+                    "condition.".format(
+                        condition_name, previous_name, node_id, dof
+                    )
+                )
+                continue
+            prescribed_collisions = [
+                (node_id, dof, prescribed_node_dofs[(node_id, dof)])
+                for node_id in translated_nodes
+                for dof in dofs
+                if (node_id, dof) in prescribed_node_dofs
+            ]
+            if prescribed_collisions:
+                node_id, dof, boundary_name = prescribed_collisions[0]
+                errors.append(
+                    "Initial condition '{}' overlaps prescribed displacement "
+                    "'{}' on exported node {} DOF {}; the prescribed "
+                    "displacement would take precedence.".format(
+                        condition_name, boundary_name, node_id, dof
+                    )
+                )
+                continue
+            for node_id in translated_nodes:
+                for dof in dofs:
+                    assigned_node_dofs[(node_id, dof)] = condition_name
+
+            set_id = self._add_set(group_name, "nodes", translated_nodes)
+            self._initial_conditions_to_export.append(
+                (initial_condition, set_id, dofs, conditions)
+            )
 
     def _analysis_record(self, module_count):
         parameters = dict(self.analysis.get("params") or {})
@@ -594,11 +1367,69 @@ class OOFEMExporter:
             )
         if module_count:
             fields.extend(("nmodules", str(module_count)))
+        if key == "staticstructural":
+            rtolv = parameters.get("rtolv", self.solver_settings.get("rtolv"))
+            if rtolv is not None:
+                rtolv = float(rtolv)
+                if not math.isfinite(rtolv) or rtolv <= 0.0:
+                    raise ValueError("rtolv must be a positive finite number")
+                fields.extend(("rtolv", self._format_number(rtolv)))
+
+            integer_settings = (
+                ("renumber", "renumber", 0),
+                ("stiffmode", "stiffMode", 0),
+                ("manrmsteps", "manrmsteps", 0),
+                ("maxiter", "maxiter", 1),
+                ("initialguess", "initialguess", 0),
+                ("smtype", "smtype", 0),
+            )
+            for source_key, output_key, minimum in integer_settings:
+                value = parameters.get(
+                    source_key,
+                    parameters.get(
+                        output_key,
+                        self.solver_settings.get(source_key),
+                    ),
+                )
+                if value is None:
+                    continue
+                if isinstance(value, bool):
+                    raise ValueError("{} must be an integer".format(output_key))
+                numeric_value = float(value)
+                if (
+                    not math.isfinite(numeric_value)
+                    or not numeric_value.is_integer()
+                    or numeric_value < minimum
+                ):
+                    raise ValueError(
+                        "{} must be an integer greater than or equal to {}".format(
+                            output_key, minimum
+                        )
+                    )
+                fields.extend((output_key, str(int(numeric_value))))
         return " ".join(fields)
 
     def _nonlinear_geometry_enabled(self):
-        parameters = self.analysis.get("params") or {}
-        return bool(parameters.get("nlgeom", self.solver_settings.get("nlgeom")))
+        """Return the inherited nlgeo default from the selected solver preset."""
+        return self.solver_settings.get("nlgeom") is True
+
+    def _element_nonlinear_geometry_enabled(self, salome_element_id):
+        """Resolve the nlgeo flag for one continuum element record."""
+        for group_name in self.elem_to_groups.get(salome_element_id, []):
+            cross_section = self.group_to_cross_section.get(group_name)
+            if cross_section is None:
+                continue
+            element_options = cross_section.get("element_options")
+            if not isinstance(element_options, dict):
+                continue
+            mode = str(
+                element_options.get("nlgeo", "inherit")
+            ).strip().casefold()
+            if mode == "on":
+                return True
+            if mode == "off":
+                return False
+        return self._nonlinear_geometry_enabled()
 
     def _prepare_records(self):
         errors = []
@@ -656,6 +1487,31 @@ class OOFEMExporter:
         self.element_id_map = {
             salome_id: oofem_id for oofem_id, salome_id in enumerate(self.element_ids, start=1)
         }
+        hyperelastic_types = {
+            "ogdencompressiblemat",
+            "mooneyrivlincompressiblemat",
+        }
+        for group_name, material in self.group_to_mat.items():
+            if (
+                str(material.get("oofem_type", "")).strip().casefold()
+                not in hyperelastic_types
+            ):
+                continue
+            disabled_elements = [
+                element_id
+                for element_id in groups[group_name].GetIDs()
+                if element_id in self.element_id_map
+                and not self._element_nonlinear_geometry_enabled(element_id)
+            ]
+            if disabled_elements:
+                errors.append(
+                    "Hyperelastic material '{}' on group '{}' requires "
+                    "Element nlgeo = Enabled; disabled exported element(s): {}.".format(
+                        material.get("name", "Unnamed"),
+                        group_name,
+                        ", ".join(map(str, disabled_elements[:8])),
+                    )
+                )
         self.domain_type = self._domain_type()
         self._prepare_time_functions(errors)
         try:
@@ -694,6 +1550,8 @@ class OOFEMExporter:
         self._set_key_to_id = {}
         self.group_name_to_set_id = {}
         self._cross_sections_to_export = []
+        self.boundary_to_parent_map = self._build_boundary_to_parent_map()
+        self._prepare_contacts(groups, errors)
         if self._uses_explicit_cross_sections:
             assignments = list(self.cross_sections)
         else:
@@ -802,12 +1660,17 @@ class OOFEMExporter:
                 (cross_section, material, set_id)
             )
 
-        self.boundary_to_parent_map = self._build_boundary_to_parent_map()
+        if self._contact_elements_to_export:
+            self._contact_cross_section_id = len(self._cross_sections_to_export) + 1
+            self._contact_material_id = len(self._materials_to_export) + 1
+
         self._boundary_conditions_to_export = []
         for boundary_condition in self.bc_map:
             group_name = boundary_condition.get("assigned_group")
             bc_name = boundary_condition.get("name", "Unnamed")
-            template = self.bc_templates.get(boundary_condition.get("oofem_type"))
+            template = self.bc_templates.get(
+                self._boundary_type_key(boundary_condition.get("oofem_type"))
+            )
             group = groups.get(group_name)
             if template is None:
                 errors.append("Boundary condition '{}' uses an unknown template.".format(bc_name))
@@ -850,6 +1713,34 @@ class OOFEMExporter:
                     else "elementBoundaries"
                 )
                 set_id = self._add_set(group_name, set_keyword, values)
+            elif apply_to == "elements":
+                if group_type == self._node_group_type():
+                    errors.append(
+                        "Boundary condition '{}' requires an element group.".format(
+                            bc_name
+                        )
+                    )
+                    continue
+                outside = sorted(set(group.GetIDs()) - set(self.element_ids))
+                if outside:
+                    errors.append(
+                        "Element group '{}' contains elements outside the exported "
+                        "material domain: {}.".format(
+                            group_name, ", ".join(map(str, outside[:8]))
+                        )
+                    )
+                    continue
+                values = sorted(
+                    {self.element_id_map[element_id] for element_id in group.GetIDs()}
+                )
+                if not values:
+                    errors.append(
+                        "Boundary condition '{}' targets an empty element group.".format(
+                            bc_name
+                        )
+                    )
+                    continue
+                set_id = self._add_set(group_name, "elements", values)
             else:
                 errors.append("Boundary condition '{}' has unsupported target '{}'.".format(bc_name, apply_to))
                 continue
@@ -860,6 +1751,13 @@ class OOFEMExporter:
             except OOFEMValidationError as error:
                 errors.extend(error.errors)
                 continue
+            if apply_to == "elements":
+                material_errors = self._validate_element_load_materials(
+                    boundary_condition, group
+                )
+                if material_errors:
+                    errors.extend(material_errors)
+                    continue
             default_time_function_id = (
                 self._time_functions_to_export[0].get("id")
                 if self._time_functions_to_export
@@ -890,6 +1788,8 @@ class OOFEMExporter:
                 )
             )
 
+        self._prepare_initial_conditions(groups, errors)
+
         if not self._cross_sections_to_export:
             errors.append("No cross section could be created from the material assignments.")
         if errors:
@@ -898,12 +1798,19 @@ class OOFEMExporter:
 
     def validate(self):
         self._prepare_records()
+        has_contact = bool(self._contact_elements_to_export)
         return {
             "nodes": len(self.node_ids),
-            "elements": len(self.element_ids),
-            "materials": len(self._materials_to_export),
-            "cross_sections": len(self._cross_sections_to_export),
+            "elements": len(self.element_ids) + len(self._contact_elements_to_export),
+            "structural_elements": len(self.element_ids),
+            "contact_elements": len(self._contact_elements_to_export),
+            "materials": len(self._materials_to_export) + int(has_contact),
+            "cross_sections": len(self._cross_sections_to_export) + int(has_contact),
             "boundary_conditions": len(self._boundary_conditions_to_export),
+            "initial_conditions": len(self._initial_conditions_to_export),
+            "contacts": len(self._contacts_to_export),
+            "contact_conditions": len(self._contact_conditions_to_export),
+            "contact_surfaces": len(self._contact_surfaces_to_export),
             "time_functions": len(self._time_functions_to_export),
             "analysis": (
                 self.analysis.get("oofem_type")
@@ -926,12 +1833,16 @@ class OOFEMExporter:
             )
 
     def _export_elements(self, output):
-        nlgeo_suffix = " nlgeo 1" if self._nonlinear_geometry_enabled() else ""
         for salome_element_id in self.element_ids:
             connectivity = [
                 self.node_id_map[node_id]
                 for node_id in self.element_connectivity[salome_element_id]
             ]
+            nlgeo_suffix = (
+                " nlgeo 1"
+                if self._element_nonlinear_geometry_enabled(salome_element_id)
+                else ""
+            )
             output.write(
                 "{} {} nodes {} {}{}\n".format(
                     self._get_oofem_element_type(salome_element_id),
@@ -939,6 +1850,30 @@ class OOFEMExporter:
                     len(connectivity),
                     " ".join(map(str, connectivity)),
                     nlgeo_suffix,
+                )
+            )
+        for contact_element in self._contact_elements_to_export:
+            connectivity = contact_element["connectivity"]
+            output.write(
+                "{} {} nodes {} {} crosssect {} mat {} NIP {}\n".format(
+                    contact_element["keyword"],
+                    contact_element["id"],
+                    len(connectivity),
+                    " ".join(map(str, connectivity)),
+                    self._contact_cross_section_id,
+                    self._contact_material_id,
+                    contact_element["nip"],
+                )
+            )
+
+    def _export_contact_surfaces(self, output):
+        if not self._contact_surfaces_to_export:
+            return
+        output.write("\n# === CONTACT SURFACES ===\n")
+        for surface in self._contact_surfaces_to_export:
+            output.write(
+                "StructuralFEContactSurface {} ce_set {}\n".format(
+                    surface["id"], surface["set_id"]
                 )
             )
 
@@ -972,6 +1907,13 @@ class OOFEMExporter:
             output.write(
                 "{} material {} set {}\n".format(
                     record, material_id, set_id
+                )
+            )
+        if self._contact_cross_section_id is not None:
+            output.write(
+                "DummyCS {} mat {}\n".format(
+                    self._contact_cross_section_id,
+                    self._contact_material_id,
                 )
             )
 
@@ -1135,9 +2077,14 @@ class OOFEMExporter:
                 )
             record_id = self.mat_internal_id_to_oofem_id[material["id"]]
             getattr(self, writer_name)(output, material, record_id)
+        if self._contact_material_id is not None:
+            output.write("DummyMat {}\n".format(self._contact_material_id))
 
     def _export_boundary_conditions(self, output):
-        if not self._boundary_conditions_to_export:
+        if (
+            not self._boundary_conditions_to_export
+            and not self._contact_conditions_to_export
+        ):
             return
         output.write("\n# === BOUNDARY CONDITIONS ===\n")
         for record_id, (
@@ -1149,11 +2096,12 @@ class OOFEMExporter:
             function_number,
         ) in enumerate(self._boundary_conditions_to_export, start=1):
             bc_type = boundary_condition["oofem_type"]
+            bc_type_key = self._boundary_type_key(bc_type)
             dof_text = " ".join(map(str, dofs))
             value_text = " ".join(
                 self._format_number(value) for value in component_values
             )
-            if bc_type == "Displacement":
+            if bc_type_key == "displacement":
                 output.write(
                     "BoundaryCondition {} loadTimeFunction {} dofs {} {} "
                     "values {} {} set {}\n".format(
@@ -1166,7 +2114,7 @@ class OOFEMExporter:
                         set_id,
                     )
                 )
-            elif bc_type == "NodalLoad":
+            elif bc_type_key == "nodalload":
                 output.write(
                     "NodalLoad {} loadTimeFunction {} dofs {} {} "
                     "components {} {} set {}\n".format(
@@ -1179,7 +2127,7 @@ class OOFEMExporter:
                         set_id,
                     )
                 )
-            elif bc_type == "SurfaceLoad" and apply_to == "element_boundary":
+            elif bc_type_key == "surfaceload" and apply_to == "element_boundary":
                 if self.domain_type in ("2dplanestress", "planestrain"):
                     record_name = "ConstantEdgeLoad"
                     load_type = " loadType 3"
@@ -1200,10 +2148,86 @@ class OOFEMExporter:
                         set_id,
                     )
                 )
+            elif bc_type_key == "deadweight" and apply_to == "elements":
+                output.write(
+                    "DeadWeight {} loadTimeFunction {} components {} {} set {}\n".format(
+                        record_id,
+                        function_number,
+                        len(component_values),
+                        value_text,
+                        set_id,
+                    )
+                )
+            elif bc_type_key == "structuraltemperatureload" and apply_to == "elements":
+                output.write(
+                    "StructTemperatureLoad {} loadTimeFunction {} "
+                    "components {} {} set {}\n".format(
+                        record_id,
+                        function_number,
+                        len(component_values),
+                        value_text,
+                        set_id,
+                    )
+                )
             else:
                 raise OOFEMValidationError(
                     ["Boundary condition '{}' has no OOFEM writer.".format(bc_type)]
                 )
+
+        first_contact_id = len(self._boundary_conditions_to_export) + 1
+        dofs = list(range(1, self._domain_dof_count() + 1))
+        for offset, (
+            contact,
+            master_surface,
+            slave_surface,
+            function_number,
+        ) in enumerate(self._contact_conditions_to_export):
+            record_id = first_contact_id + offset
+            parameters = contact["params"]
+            record = (
+                "structuralpenaltycontactbc {} loadTimeFunction {} "
+                "dofs {} {} pn {} pt {} friction {} mastersurface {} "
+                "slavesurface {} nsd {}"
+            ).format(
+                record_id,
+                function_number,
+                len(dofs),
+                " ".join(map(str, dofs)),
+                self._format_number(parameters["normal_penalty"]),
+                self._format_number(parameters["tangential_penalty"]),
+                self._format_number(parameters["friction"]),
+                master_surface,
+                slave_surface,
+                self._domain_dof_count(),
+            )
+            if parameters["algorithm"]:
+                record += " algo {}".format(parameters["algorithm"])
+            output.write(record + "\n")
+
+    def _export_initial_conditions(self, output):
+        if not self._initial_conditions_to_export:
+            return
+        output.write("\n# === INITIAL CONDITIONS ===\n")
+        for record_id, (
+            _initial_condition,
+            set_id,
+            dofs,
+            conditions,
+        ) in enumerate(self._initial_conditions_to_export, start=1):
+            condition_text = " ".join(
+                "{} {}".format(mode, self._format_number(value))
+                for mode, value in conditions
+            )
+            output.write(
+                "InitialCondition {} conditions {} {} dofs {} {} set {}\n".format(
+                    record_id,
+                    len(conditions),
+                    condition_text,
+                    len(dofs),
+                    " ".join(map(str, dofs)),
+                    set_id,
+                )
+            )
 
     def _export_time_functions(self, output):
         output.write("\n# === TIME FUNCTIONS ===\n")
@@ -1261,23 +2285,33 @@ class OOFEMExporter:
             )
         output.write("domain {}\n".format(self.domain_type))
         output.write("OutputManager tstep_all dofman_all element_all\n")
-        output.write(
+        has_contact = bool(self._contact_elements_to_export)
+        header = (
             "ndofman {} nelem {} ncrosssect {} nmat {} nbc {} "
-            "nic 0 nltf {} nset {}\n".format(
+            "nic {} nltf {} nset {}"
+        ).format(
                 len(self.node_ids),
-                len(self.element_ids),
-                len(self._cross_sections_to_export),
-                len(self._materials_to_export),
-                len(self._boundary_conditions_to_export),
+                len(self.element_ids) + len(self._contact_elements_to_export),
+                len(self._cross_sections_to_export) + int(has_contact),
+                len(self._materials_to_export) + int(has_contact),
+                len(self._boundary_conditions_to_export)
+                + len(self._contact_conditions_to_export),
+                len(self._initial_conditions_to_export),
                 len(self._time_functions_to_export),
                 len(self._groups_to_export),
             )
-        )
+        if self._contact_surfaces_to_export:
+            header += " ncontactsurf {}".format(
+                len(self._contact_surfaces_to_export)
+            )
+        output.write(header + "\n")
         self._export_nodes(output)
         self._export_elements(output)
+        self._export_contact_surfaces(output)
         self._export_cross_sections(output)
         self._export_materials(output)
         self._export_boundary_conditions(output)
+        self._export_initial_conditions(output)
         self._export_time_functions(output)
         self._export_sets(output)
 

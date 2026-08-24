@@ -12,6 +12,8 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from OOFEMSalomePlugin.OOFEMProject import PROJECT_SCHEMA_VERSION
+
 try:
     import OOFEMSalomePlugin.OOFEMModule as module_mod
     import OOFEMSalomePlugin.OOFEMSalome as salome_mod
@@ -98,8 +100,8 @@ class StudySessionTests(unittest.TestCase):
     def test_switching_studies_isolates_state_and_reuses_stable_study_id(self):
         study_a = FakeStudy(101)
         study_b = FakeStudy(202)
-        state_a = {"schema_version": 2, "name": "A"}
-        state_b = {"schema_version": 2, "name": "B"}
+        state_a = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "A"}
+        state_b = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "B"}
 
         self.activate(study_a)
         self.assertTrue(self.module.set_study_state(state_a))
@@ -120,7 +122,10 @@ class StudySessionTests(unittest.TestCase):
     def test_object_identity_fallback_does_not_merge_unidentified_studies(self):
         study_a = ObjectOnlyStudy()
         study_b = ObjectOnlyStudy()
-        state_a = {"schema_version": 2, "name": "object A"}
+        state_a = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "object A",
+        }
 
         self.activate(study_a)
         self.module.set_study_state(state_a)
@@ -130,8 +135,8 @@ class StudySessionTests(unittest.TestCase):
         self.assertIs(self.module.study_state, state_a)
 
     def test_close_discards_only_active_study_session(self):
-        state_a = {"schema_version": 2, "name": "A"}
-        state_b = {"schema_version": 2, "name": "B"}
+        state_a = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "A"}
+        state_b = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "B"}
 
         self.activate(FakeStudy(1))
         self.module.set_study_state(state_a)
@@ -154,8 +159,14 @@ class StudySessionTests(unittest.TestCase):
     def test_open_files_before_activation_uses_salome_active_study(self):
         study_a = FakeStudy(41)
         study_b = FakeStudy(42)
-        state_a = {"schema_version": 2, "name": "loaded A"}
-        state_b = {"schema_version": 2, "name": "loaded B"}
+        state_a = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "loaded A",
+        }
+        state_b = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "loaded B",
+        }
         fake_salome = types.ModuleType("salome")
         self.module.dock = None
 
@@ -183,8 +194,14 @@ class StudySessionTests(unittest.TestCase):
         self.assertIs(self.module.study_state, state_b)
 
     def test_save_files_serializes_salome_active_session(self):
-        state_a = {"schema_version": 2, "name": "save A"}
-        state_b = {"schema_version": 2, "name": "save B"}
+        state_a = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "save A",
+        }
+        state_b = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "save B",
+        }
         self.activate(FakeStudy(51))
         self.module.set_study_state(state_a)
         self.activate(FakeStudy(52))
@@ -212,9 +229,12 @@ class StudySessionTests(unittest.TestCase):
         self.activate(FakeStudy(51))
         self.assertIs(self.module.study_state, state_a)
 
-    def test_load_migrates_legacy_but_preserves_canonical_v2_identity(self):
+    def test_load_migrates_v2_and_legacy_but_preserves_v3_identity(self):
         self.activate(FakeStudy(303))
-        canonical = {"schema_version": 2, "extension": {"value": 1}}
+        canonical = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "extension": {"value": 1},
+        }
         with unittest.mock.patch.object(
             module_mod.OOFEMState, "load_file", return_value=canonical
         ):
@@ -223,6 +243,38 @@ class StudySessionTests(unittest.TestCase):
             )
         self.assertIs(self.module.study_state, canonical)
         self.assertEqual(self.module.study_url, "study.hdf")
+
+        version_2 = {
+            "schema_version": 2,
+            "custom_extension": {"source": "v2"},
+            "contacts": [
+                {
+                    "master": "MASTER",
+                    "slave": "SLAVE",
+                    "params": {"pn": 1234.0, "vendor": {"kept": True}},
+                    "vendor_contact": "kept",
+                }
+            ],
+        }
+        with unittest.mock.patch.object(
+            module_mod.OOFEMState, "load_file", return_value=version_2
+        ):
+            self.assertTrue(
+                self.module.load(["/unused", module_mod.STATE_FILE_NAME], "v2.hdf")
+            )
+        migrated_v2 = self.module.study_state
+        self.assertIsNot(migrated_v2, version_2)
+        self.assertEqual(migrated_v2["schema_version"], PROJECT_SCHEMA_VERSION)
+        self.assertEqual(migrated_v2["custom_extension"], {"source": "v2"})
+        self.assertEqual(migrated_v2["contacts"][0]["master_group"], "MASTER")
+        self.assertEqual(migrated_v2["contacts"][0]["slave_group"], "SLAVE")
+        self.assertEqual(
+            migrated_v2["contacts"][0]["params"]["vendor"], {"kept": True}
+        )
+        self.assertEqual(migrated_v2["contacts"][0]["vendor_contact"], "kept")
+        self.assertEqual(version_2["schema_version"], 2)
+        self.assertIn("master", version_2["contacts"][0])
+        self.assertNotIn("master_group", version_2["contacts"][0])
 
         legacy = {
             "materials": [],
@@ -236,11 +288,57 @@ class StudySessionTests(unittest.TestCase):
                 self.module.load(["/unused", module_mod.STATE_FILE_NAME], "legacy.hdf")
             )
         self.assertIsNot(self.module.study_state, legacy)
-        self.assertEqual(self.module.study_state["schema_version"], 2)
+        self.assertEqual(
+            self.module.study_state["schema_version"], PROJECT_SCHEMA_VERSION
+        )
         self.assertEqual(
             self.module.study_state["custom_extension"], {"kept": True}
         )
         self.assertNotIn("schema_version", legacy)
+
+    def test_load_refuses_future_project_schema(self):
+        self.activate(FakeStudy(304))
+        original = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "current",
+        }
+        self.module.set_study_state(original)
+        future = {
+            "schema_version": PROJECT_SCHEMA_VERSION + 1,
+            "name": "future",
+        }
+
+        with unittest.mock.patch.object(
+            module_mod.OOFEMState, "load_file", return_value=future
+        ):
+            loaded = self.module.load(
+                ["/unused", module_mod.STATE_FILE_NAME], "future.hdf"
+            )
+
+        self.assertFalse(loaded)
+        self.assertIs(self.module.study_state, original)
+        self.assertEqual(future["schema_version"], PROJECT_SCHEMA_VERSION + 1)
+
+    def test_load_refuses_invalid_or_unbounded_schema_without_losing_state(self):
+        self.activate(FakeStudy(305))
+        original = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "current",
+        }
+        self.module.set_study_state(original)
+
+        for invalid_version in ("3", 3.0, 10**400):
+            with self.subTest(schema_version=invalid_version), unittest.mock.patch.object(
+                module_mod.OOFEMState,
+                "load_file",
+                return_value={"schema_version": invalid_version},
+            ):
+                self.assertFalse(
+                    self.module.load(
+                        ["/unused", module_mod.STATE_FILE_NAME], "invalid.hdf"
+                    )
+                )
+                self.assertIs(self.module.study_state, original)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,15 @@
 """Dialog for OOFEM loads and prescribed boundary conditions."""
 
+import math
+
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
+
+
+def _coerce_finite_float(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("expected a finite number")
+    return value
 
 
 def _format_value(value, parameter_type):
@@ -10,6 +19,12 @@ def _format_value(value, parameter_type):
         value, (list, tuple)
     ):
         return ", ".join(str(item) for item in value)
+    if parameter_type == "mode_value_map" and isinstance(value, dict):
+        return ", ".join(
+            "{}={}".format(key, value[key])
+            for key in ("u", "v", "a")
+            if key in value
+        )
     return str(value)
 
 
@@ -17,15 +32,31 @@ def _coerce_value(text, parameter_type):
     if parameter_type == "int":
         return int(text)
     if parameter_type == "float":
-        return float(text)
+        return _coerce_finite_float(text)
     if parameter_type == "string":
         return str(text)
     if parameter_type in ("int_list", "float_list"):
         parts = [part.strip() for part in text.split(",")]
         if not parts or any(not part for part in parts):
             raise ValueError("expected comma-separated numbers")
-        converter = int if parameter_type == "int_list" else float
+        converter = int if parameter_type == "int_list" else _coerce_finite_float
         return [converter(part) for part in parts]
+    if parameter_type == "mode_value_map":
+        conditions = {}
+        parts = [part.strip() for part in text.replace(";", ",").split(",")]
+        if not parts or any(not part for part in parts):
+            raise ValueError("expected entries such as u=0, v=1.5")
+        for part in parts:
+            if "=" not in part:
+                raise ValueError("expected mode=value entries")
+            mode, raw_value = (value.strip() for value in part.split("=", 1))
+            mode = mode.lower()
+            if mode not in ("u", "v", "a"):
+                raise ValueError("mode must be u, v, or a")
+            if mode in conditions:
+                raise ValueError("mode '{}' is duplicated".format(mode))
+            conditions[mode] = _coerce_finite_float(raw_value)
+        return conditions
     raise ValueError("unsupported parameter type '{}'".format(parameter_type))
 
 
@@ -39,9 +70,13 @@ class OOFEMBCDialog(QtWidgets.QDialog):
         existing_bc=None,
         parent=None,
         time_functions=None,
+        entity_label="Boundary Condition",
+        use_time_function=True,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Boundary Condition Definition")
+        self.entity_label = entity_label
+        self.use_time_function = bool(use_time_function)
+        self.setWindowTitle("{} Definition".format(entity_label))
         self.bc_templates = list(bc_templates or [])
         self.time_functions = list(time_functions or [])
         self._existing_bc = existing_bc or None
@@ -64,9 +99,12 @@ class OOFEMBCDialog(QtWidgets.QDialog):
         self.groupCombo = QtWidgets.QComboBox()
         self.timeFunctionCombo = QtWidgets.QComboBox()
         form_layout.addRow("Instance Name:", self.nameEdit)
-        form_layout.addRow("OOFEM BC Type:", self.typeCombo)
+        form_layout.addRow("OOFEM Type:", self.typeCombo)
         form_layout.addRow("Assign to Compatible Group:", self.groupCombo)
-        form_layout.addRow("Time Function:", self.timeFunctionCombo)
+        self.timeFunctionLabel = QtWidgets.QLabel("Time Function:")
+        form_layout.addRow(self.timeFunctionLabel, self.timeFunctionCombo)
+        self.timeFunctionLabel.setVisible(self.use_time_function)
+        self.timeFunctionCombo.setVisible(self.use_time_function)
 
         self.parameterTable = QtWidgets.QTableWidget()
         self.parameterTable.setColumnCount(2)
@@ -229,12 +267,18 @@ class OOFEMBCDialog(QtWidgets.QDialog):
 
         dofs = parameters.get("dofs")
         values = parameters.get("values", parameters.get("components"))
+        conditions = parameters.get("conditions")
         if dofs is not None:
             if not dofs or any(dof < 1 for dof in dofs):
                 raise ValueError("DOFs must be positive integers.")
             if len(set(dofs)) != len(dofs):
                 raise ValueError("DOFs must not contain duplicates.")
-            if not isinstance(values, list) or len(values) != len(dofs):
+            if conditions is not None:
+                if not isinstance(conditions, dict) or not conditions:
+                    raise ValueError(
+                        "At least one u, v, or a initial-condition mode is required."
+                    )
+            elif not isinstance(values, list) or len(values) != len(dofs):
                 raise ValueError(
                     "DOFs and values/components must have equal lengths."
                 )
@@ -246,7 +290,7 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             raise ValueError("Instance name must not be empty.")
         template = self._selected_template()
         if template is None:
-            raise ValueError("A boundary-condition type must be selected.")
+            raise ValueError("An entity type must be selected.")
         group_name = self.groupCombo.currentText().strip()
         if (
             self.groupCombo.currentIndex() < 0
@@ -254,8 +298,12 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             or group_name == "<None>"
         ):
             raise ValueError("A compatible mesh group must be selected.")
-        function_id = self.timeFunctionCombo.currentData()
-        if self.time_functions and function_id is None:
+        function_id = (
+            self.timeFunctionCombo.currentData()
+            if self.use_time_function
+            else None
+        )
+        if self.use_time_function and self.time_functions and function_id is None:
             raise ValueError("A time function must be selected.")
 
         data = {
@@ -273,7 +321,7 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             self._validated_data()
         except ValueError as error:
             QtWidgets.QMessageBox.warning(
-                self, "Invalid Boundary Condition", str(error)
+                self, "Invalid {}".format(self.entity_label), str(error)
             )
             return
         super().accept()
@@ -288,10 +336,14 @@ class OOFEMBCDialog(QtWidgets.QDialog):
         existing_bc=None,
         parent=None,
         time_functions=None,
+        entity_label="Boundary Condition",
+        use_time_function=True,
     ):
         if not bc_templates:
             QtWidgets.QMessageBox.warning(
-                parent, "No Boundary Conditions", "No BC templates are available."
+                parent,
+                "No {} Templates".format(entity_label),
+                "No {} templates are available.".format(entity_label.lower()),
             )
             return None
         dialog = OOFEMBCDialog(
@@ -300,6 +352,8 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             existing_bc,
             parent,
             time_functions=time_functions,
+            entity_label=entity_label,
+            use_time_function=use_time_function,
         )
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             return dialog.get_data()

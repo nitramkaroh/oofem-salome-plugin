@@ -26,6 +26,7 @@ if QtWidgets is not None:
     from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
     from OOFEMSalomePlugin.OOFEMConfig import (
         load_boundary_condition_templates,
+        load_initial_condition_templates,
     )
 
     _APPLICATION = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -157,6 +158,40 @@ class BoundaryConditionDialogV2Tests(unittest.TestCase):
         dialog.accept()
         self.assertNotEqual(dialog.result(), QtWidgets.QDialog.Accepted)
         self.assertEqual(self.warning.call_count, 2)
+
+    def test_initial_condition_uses_mode_map_without_time_function(self):
+        dialog = OOFEMBCDialog(
+            load_initial_condition_templates(),
+            self.groups,
+            entity_label="Initial Condition",
+            use_time_function=False,
+        )
+        self.addCleanup(dialog.deleteLater)
+        dialog.nameEdit.setText("initial velocity")
+        dialog.groupCombo.setCurrentText("LOADED")
+        self._set_parameter(dialog, "dofs", "1, 2")
+        self._set_parameter(dialog, "conditions", "u=0.25, v=-1.5")
+
+        dialog.accept()
+
+        self.assertEqual(dialog.result(), QtWidgets.QDialog.Accepted)
+        self.assertFalse(dialog.timeFunctionCombo.isVisible())
+        self.assertEqual(
+            dialog.get_data(),
+            {
+                "name": "initial velocity",
+                "oofem_type": "InitialCondition",
+                "assigned_group": "LOADED",
+                "params": {
+                    "dofs": [1, 2],
+                    "conditions": {"u": 0.25, "v": -1.5},
+                },
+            },
+        )
+
+        self._set_parameter(dialog, "conditions", "v=1, v=2")
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            dialog.get_data()
 
 
 if __name__ == "__main__":

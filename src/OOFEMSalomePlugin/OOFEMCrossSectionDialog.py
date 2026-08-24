@@ -29,6 +29,8 @@ def _coerce_parameter(text, parameter_type):
 class OOFEMCrossSectionDialog(QtWidgets.QDialog):
     """Create or edit a cross section and its mesh/material references."""
 
+    NLGEO_MODES = {"inherit", "on", "off"}
+
     def __init__(
         self,
         cs_templates,
@@ -61,11 +63,20 @@ class OOFEMCrossSectionDialog(QtWidgets.QDialog):
         self.typeCombo = QtWidgets.QComboBox()
         self.materialCombo = QtWidgets.QComboBox()
         self.groupCombo = QtWidgets.QComboBox()
+        self.nlgeoCombo = QtWidgets.QComboBox()
+        self.nlgeoCombo.addItem("Inherit solver preset", "inherit")
+        self.nlgeoCombo.addItem("Enabled (write nlgeo 1)", "on")
+        self.nlgeoCombo.addItem("Disabled", "off")
+        self.nlgeoCombo.setToolTip(
+            "Controls the nlgeo field on continuum element records in the "
+            "assigned mesh group. This option is independent of contact."
+        )
 
         form_layout.addRow("Instance Name:", self.nameEdit)
         form_layout.addRow("Cross Section Type:", self.typeCombo)
         form_layout.addRow("Use Material:", self.materialCombo)
         form_layout.addRow("Assign to Mesh Group:", self.groupCombo)
+        form_layout.addRow("Element nlgeo:", self.nlgeoCombo)
 
         self.parameterTable = QtWidgets.QTableWidget()
         self.parameterTable.setColumnCount(2)
@@ -160,6 +171,24 @@ class OOFEMCrossSectionDialog(QtWidgets.QDialog):
 
             if existing_overrides:
                 self.overrideGroup.setChecked(True)
+
+            raw_element_options = existing_cs.get("element_options")
+            if raw_element_options is None:
+                raw_element_options = {}
+            if isinstance(raw_element_options, dict):
+                raw_nlgeo_mode = raw_element_options.get(
+                    "nlgeo", "inherit"
+                )
+            else:
+                raw_nlgeo_mode = "invalid element_options"
+            nlgeo_mode = str(raw_nlgeo_mode).strip().casefold()
+            nlgeo_index = self.nlgeoCombo.findData(nlgeo_mode)
+            if nlgeo_index < 0:
+                self.nlgeoCombo.addItem(
+                    "[invalid] {}".format(raw_nlgeo_mode), nlgeo_mode
+                )
+                nlgeo_index = self.nlgeoCombo.count() - 1
+            self.nlgeoCombo.setCurrentIndex(nlgeo_index)
 
         self.typeCombo.currentIndexChanged.connect(self._populate_parameters)
         self._populate_parameters()
@@ -284,11 +313,31 @@ class OOFEMCrossSectionDialog(QtWidgets.QDialog):
         if self.groupCombo.currentIndex() < 0 or not group_name:
             raise ValueError("A mesh group reference must be selected.")
 
+        nlgeo_mode = str(
+            self.nlgeoCombo.currentData() or ""
+        ).strip().casefold()
+        if nlgeo_mode not in self.NLGEO_MODES:
+            raise ValueError(
+                "Element nlgeo must be Inherit, Enabled, or Disabled."
+            )
+        existing_options = (
+            self._existing_cs.get("element_options")
+            if self._existing_cs
+            else None
+        )
+        element_options = (
+            dict(existing_options)
+            if isinstance(existing_options, dict)
+            else {}
+        )
+        element_options["nlgeo"] = nlgeo_mode
+
         return {
             "name": name,
             "oofem_type": template["oofem_name"],
             "material_id": self.materialCombo.currentData(),
             "assigned_group": group_name,
+            "element_options": element_options,
             "element_mapping_override": self._override_mapping(),
             "params": self._parameters(),
         }

@@ -51,6 +51,10 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(any(not item["vtk"] for item in presets))
         self.assertTrue(solver_settings("linear-static-vtk")["vtk"])
         self.assertFalse(solver_settings("linear-static-text")["vtk"])
+        contact = solver_settings("contact-static-vtk")
+        self.assertFalse(contact["nlgeom"])
+        for field_id in ("150", "151", "152"):
+            self.assertIn(field_id, contact["vtk_record"])
 
 
 class RunnerTests(unittest.TestCase):

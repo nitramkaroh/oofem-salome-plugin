@@ -17,6 +17,7 @@ from tests.test_exporter import (  # noqa: E402
     OOFEMExporter,
     OOFEMValidationError,
     boundary_templates,
+    ogden_quad_model,
     plane_stress_model,
     truss_model,
 )
@@ -146,6 +147,117 @@ class ExporterV2Tests(unittest.TestCase):
             exporter.export(str(path))
             model = path.read_text(encoding="utf-8")
         self.assertIn("SimpleCS 1 thick 0.75 material 1 set 1", model)
+
+    def test_element_nlgeo_mode_overrides_or_inherits_solver_default(self):
+        cases = (
+            ("on", False, True),
+            ("off", True, False),
+            ("inherit", True, True),
+            ("inherit", False, False),
+        )
+        for mode, solver_default, expected_enabled in cases:
+            with self.subTest(mode=mode, solver_default=solver_default):
+                mesh, mapping, materials, bcs, cross_sections = (
+                    _explicit_plane_stress_model()
+                )
+                cross_sections[0]["element_options"] = {"nlgeo": mode}
+                exporter = OOFEMExporter(
+                    mesh,
+                    mapping,
+                    materials,
+                    bcs,
+                    boundary_templates(),
+                    solver_settings={
+                        "vtk": False,
+                        "nlgeom": solver_default,
+                    },
+                    cross_sections=cross_sections,
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    path = pathlib.Path(directory) / "nlgeo.in"
+                    exporter.export(str(path))
+                    element_record = next(
+                        line
+                        for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.startswith("TrPlaneStress2d ")
+                    )
+
+                self.assertEqual(" nlgeo 1" in element_record, expected_enabled)
+
+    def test_invalid_element_nlgeo_mode_is_rejected(self):
+        mesh, mapping, materials, bcs, cross_sections = (
+            _explicit_plane_stress_model()
+        )
+        cross_sections[0]["element_options"] = {"nlgeo": "sometimes"}
+        exporter = OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={"vtk": False},
+            cross_sections=cross_sections,
+        )
+
+        with self.assertRaisesRegex(
+            OOFEMValidationError, r"invalid element nlgeo mode.*inherit, on, or off"
+        ):
+            exporter.validate()
+
+    def test_analysis_param_does_not_override_inherited_solver_default(self):
+        exporter = self._plane_exporter(
+            solver_settings={"vtk": False, "nlgeom": False},
+            analysis={
+                "oofem_type": "StaticStructural",
+                "params": {"nsteps": 1, "nlgeom": True},
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "analysis_nlgeo.in"
+            exporter.export(str(path))
+            model = path.read_text(encoding="utf-8")
+
+        self.assertNotIn(" nlgeo ", model)
+
+    def test_hyperelastic_assignment_requires_effective_nlgeo_on(self):
+        mesh, mapping, materials, bcs = ogden_quad_model()
+        materials = copy.deepcopy(materials)
+        materials[0].pop("assigned_group", None)
+        cross_section = {
+            "id": "cs-ogden",
+            "name": "ogden section",
+            "oofem_type": "SimpleCS",
+            "material_id": "material-ogden",
+            "assigned_group": "sheet",
+            "element_options": {"nlgeo": "off"},
+            "params": {"thick": 1.0},
+        }
+        exporter = OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={"vtk": False, "nlgeom": True},
+            cross_sections=[cross_section],
+        )
+
+        with self.assertRaisesRegex(
+            OOFEMValidationError, r"Hyperelastic material.*requires.*nlgeo"
+        ):
+            exporter.validate()
+
+        enabled = copy.deepcopy(cross_section)
+        enabled["element_options"]["nlgeo"] = "on"
+        OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={"vtk": False, "nlgeom": False},
+            cross_sections=[enabled],
+        ).validate()
 
     def test_cross_section_references_and_assignments_are_validated(self):
         mesh, mapping, materials, bcs, cross_sections = (

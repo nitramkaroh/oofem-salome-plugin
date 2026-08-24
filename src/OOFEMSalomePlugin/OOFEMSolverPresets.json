@@ -26,6 +26,22 @@
       "vtk": true,
       "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
       "nlgeom": true
+    },
+    {
+      "id": "contact-static-vtk",
+      "display_name": "Penalty contact + VTK",
+      "description": "Nonlinear penalty contact for the current OOFEM contact implementation, including 2D/3D carriers and gap, pressure, and status fields; continuum nlgeo remains an independent element option.",
+      "engng_model": "StaticStructural",
+      "nsteps": 10,
+      "vtk": true,
+      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 4 1 150 151 152",
+      "rtolv": 1e-9,
+      "maxiter": 100,
+      "manrmsteps": 1,
+      "initialguess": 1,
+      "smtype": 0,
+      "stiffmode": 0,
+      "renumber": 0
     }
   ]
 }

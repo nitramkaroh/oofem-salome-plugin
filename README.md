@@ -8,12 +8,19 @@ SALOME GUI, and opens native OOFEM VTK results in ParaVis.
 
 - Explicit material and `SimpleCS` cross-section entities with references to
   structural edge, face, or volume groups
+- Per-group continuum-element `nlgeo` control with inherit/on/off modes; a
+  disjoint one-element SALOME assignment group provides individual-element
+  control
 - Static structural, linear static, and eigenvalue-dynamic engineering models
   with editable analysis parameters
 - Constant and piecewise-linear load-time functions shared by loads and
   prescribed conditions
 - Multi-DOF displacements and nodal loads assigned to node groups
 - Multi-component distributed loads assigned to boundary edge/face groups
+- Verified dead-weight/body loads and uniform structural temperature loads
+- Constant structural initial displacement, velocity, and acceleration records
+- Master/slave structural penalty contact generated from SALOME edge/face
+  groups, including one-pass/two-pass enforcement and orientation control
 - Complete OOFEM records for the supported linear structural elements
 - Contiguous OOFEM ID remapping from arbitrary SALOME mesh IDs
 - Pre-export validation of element order, assignments, references, overlaps,
@@ -21,12 +28,16 @@ SALOME GUI, and opens native OOFEM VTK results in ParaVis.
 - Atomic input generation: a failed writer never replaces a known-good input
 - Non-blocking OOFEM execution with live output, timeout, cancel, and kill
   fallback
-- Native .pvd/.vtu discovery, optional automatic ParaVis loading, and optional
-  .vtu/.vtk to MED conversion through meshio
+- Immutable per-study run history with versioned JSON manifests, input hashes,
+  solver version/git provenance, logs, terminal states, rerun, and explicit
+  cleanup
+- Native .pvd/.vtu discovery with time-step and field summaries, optional
+  automatic ParaVis loading, and optional .vtu/.vtk to MED conversion through
+  meshio
 - Typed SALOME preferences for executable, working/results directories,
   timeout, and automatic postprocessing
 - Editable material templates plus named steel, aluminium, and concrete presets
-- Version-2 project JSON with deterministic legacy migration, isolated per
+- Version-3 project JSON with deterministic legacy migration, isolated per
   SALOME study and embedded in HDF through native-module callbacks
 
 The validated writer currently supports:
@@ -35,8 +46,8 @@ The validated writer currently supports:
 | --- | --- | --- |
 | 2-node edge | Truss3D | 3D truss |
 | 3-node triangle | TrPlaneStress2d | 2D plane stress |
-| 4-node quadrangle | PlaneStress2d | 2D plane stress |
-| 8-node quadrangle | QPlaneStrain (default), Quad1PlaneStrain/QPlaneStrain via override | 2D plane strain |
+| 4-node quadrangle | PlaneStress2d (default), Quad1PlaneStrain via override | 2D plane stress/strain |
+| 8-node quadrangle | QPlaneStrain | 2D plane strain |
 | 4-node tetrahedron | LTRSpace | 3D solid |
 | 8-node hexahedron | LSpace | 3D solid |
 | 20-node hexahedron | QSpace | 3D solid |
@@ -62,9 +73,70 @@ templates, the plugin also supports:
 | Mooney-Rivlin Hyperelastic (compressible) | `mooneyrivlincompressiblemat` | Large-strain rubber-like materials |
 
 The Ogden and Mooney-Rivlin hyperelastic materials require large-displacement
-kinematics. Select the **Large-strain static + VTK (nlgeo)** solver preset so
-the plugin writes the `nlgeo 1` flag on every element record; without it,
-OOFEM rejects these materials outright.
+kinematics. In the corresponding **Cross Section** assignment, set **Element
+nlgeo** to **Enabled** so the plugin writes `nlgeo 1` on that group's continuum
+element records. **Inherit solver preset** retains the convenient global
+default of **Large-strain static + VTK (nlgeo)**, while an explicit **Disabled**
+setting overrides it for the selected group.
+
+Cross-section assignment groups must remain disjoint. To control one element
+individually, move it out of the broader assignment group and create a
+separate one-element group; overlapping assignments are rejected before
+export.
+
+### Structural contact
+
+The **Contacts** tab creates OOFEM contact carrier elements directly from
+SALOME boundary groups. The integration targets the current OOFEM contact
+implementation and supports:
+
+| SALOME boundary | OOFEM contact element | Domain | Integration points |
+| --- | --- | --- | --- |
+| Linear 2-node edge | `StructuralContactElement_LineLin` | Plane stress/plane strain | 2 |
+| Linear 3-node face | `StructuralContactElement_TrLin` | 3D | 3 |
+| Linear 4-node face | `StructuralContactElement_QuadLin` | 3D | 4 |
+
+For every unique oriented boundary group, the exporter generates contact
+elements, an element `Set`, and a `StructuralFEContactSurface`. It also writes
+a shared `DummyCS`/`DummyMat`, `ncontactsurf`, and one or two
+`structuralpenaltycontactbc` records. Contact-surface IDs deliberately match
+the IDs of their element sets for compatibility with current OOFEM contact
+initialization.
+
+Adding the first contact automatically selects **Penalty contact + VTK**,
+switches the engineering model to `StaticStructural`, and initializes ten
+load steps. The preset requests displacement/stress plus contact gap,
+pressure, and status fields 150-152. **Check Solver** shows the executable and
+any repository URL, branch, and hash reported by the solver; the same
+provenance is stored in each run manifest.
+
+Contact enforcement is nonlinear and uses `StaticStructural`, but contact does
+not require the continuum-element parameter `nlgeo 1`. The contact preset
+therefore leaves newly inherited `nlgeo` off. If a model already inherits
+`nlgeo` from the large-strain preset, adding contact materializes that state as
+explicit **Enabled** before switching presets, so its continuum kinematics do
+not change. Enable it independently on element groups whose
+material/formulation needs finite-deformation kinematics; validation requires
+it for Ogden and Mooney-Rivlin assignments. Carrier orientation is derived
+from each owning continuum facet, independent of the standalone SMESH
+edge/face order.
+Use **Reverse master/slave orientation** only when the desired contact-search
+normal is opposite to that outward parent-facet normal. In one-pass contact,
+the slave side supplies the integration points; a finer/softer side is
+normally the better slave. Two-pass adds the reverse condition and can
+effectively increase the penalty response.
+
+The production default is frictionless (`friction = 0`). Nonzero friction is
+available in the current contact implementation, but should be introduced only
+after the normal-penalty response is calibrated. The required
+load-time-function reference is written, but current contact assembly does not
+use it to ramp or deactivate contact. In 2D, contact integrates boundary
+length rather than `SimpleCS` thickness, so forces are per unit thickness
+unless the penalty is scaled consistently.
+
+Quadratic contact boundaries, self-contact, rigid analytical surfaces,
+mortar/augmented-Lagrange contact, axisymmetric contact, automatic penalty
+selection, and the alternative `QuadLinGauss` carrier are not exported yet.
 
 ## Install as a SALOME module (recommended)
 
@@ -186,15 +258,26 @@ export SALOME_PLUGINS_PATH="$PWD${SALOME_PLUGINS_PATH:+:$SALOME_PLUGINS_PATH}"
    compatible `SimpleCS`; review or edit it in **Cross Sections**.
 6. Define constant or piecewise-linear histories in **Analysis**, then add
    boundary conditions with comma-separated DOFs/components and select their
-   time function.
-7. Configure the executable and run preferences in **File > Preferences >
+   time function. Body/dead-weight and uniform temperature loads target
+   element groups.
+7. Add optional zero-valued structural initial-condition records in **Initial
+   Conditions**. Nonzero displacement, velocity, and acceleration values wait
+   for a supported transient engineering model and are rejected for the
+   currently available static/eigenvalue analyses.
+8. For contact, create two exterior edge groups in 2D or face groups in 3D,
+   then add a pair in **Contacts**. The plugin selects the nonlinear contact
+   preset automatically; start frictionless and review master/slave direction.
+9. Configure the executable and run preferences in **File > Preferences >
    OOFEM**. Choose an input path in **Export / Solve** if desired.
-8. Click **Validate**, then **Generate & Run**. A running job can be cancelled
-   without freezing SALOME.
-9. Click **Commit OOFEM Settings**, then save the SALOME study. Each open study
+10. Click **Validate**, then **Generate & Run**. Each solve receives a new
+   timestamped run directory and can be cancelled without freezing SALOME.
+11. Click **Commit OOFEM Settings**, then save the SALOME study. Each open study
    retains an independent OOFEM project state.
-10. In **Postprocess**, refresh results and open the .pvd in ParaVis (or enable
-    automatic opening in preferences).
+12. In **Postprocess**, select any recorded run, inspect its status, time steps,
+    and fields, then open the .pvd in ParaVis. **Rerun as New** preserves the
+    source run; deletion always requires confirmation. If SALOME was closed
+    during a solve, use **Mark Interrupted** after confirming that the external
+    OOFEM process has ended; partial results are retained and made read-only.
 
 Values use the unit system chosen for the model; the plugin does not perform
 unit conversion.
@@ -215,11 +298,11 @@ as skipped. Installer isolation, plugin registration, study persistence,
 validation, result discovery, ParaVis dispatch, and MED conversion dispatch
 still run.
 
-`tests/test_main_widget.py` drives the actual `OOFEMMainWidget` under
-`QT_QPA_PLATFORM=offscreen` (mesh/group discovery, material and boundary
-condition property editing, validation, and study-state commit). It needs a
-real PyQt5 or PySide2 install and reports itself skipped without one; every
-other test file fakes Qt/SALOME away entirely.
+The MainWidget and dialog suites drive the actual Qt controls under
+`QT_QPA_PLATFORM=offscreen` (mesh/group discovery, entity editing, validation,
+and study-state commit). They need a real PyQt5 or PySide2 install and report
+themselves skipped without one. SALOME services and SMESH are faked in the
+headless suite.
 
 ### 2. Real OOFEM regression tests
 
@@ -246,6 +329,20 @@ The integration suite generates and solves:
 - an LTRSpace tetrahedron with a face-group load.
 
 It also verifies that the VTK preset creates .vtu output.
+
+Additional solver regressions cover dead weight against the analytical
+uniform-body-force displacement, free thermal expansion, and acceptance of
+the generated initial-condition record. Contact regressions target the current
+OOFEM implementation and cover 2D line plus 3D triangular/quadrilateral carriers,
+surface/set numbering, parent-facet orientation, one-pass and two-pass
+conditions, contact VTK fields, and an exporter-generated continuum model.
+
+To run only contact regressions against a selected binary:
+
+~~~bash
+OOFEM_BIN=/absolute/path/to/oofem \
+  python3 -m unittest tests.test_contact_exporter -v
+~~~
 
 ### 3. SALOME end-to-end smoke test
 
@@ -302,6 +399,20 @@ Use the following plugin assignments:
 6. Validation should report 21 nodes, 12 elements, 2 materials, 2 cross
    sections, 2 boundary conditions, 4 sets, and a `2dplanestress` domain.
 
+For a minimal two-body contact setup, run:
+
+~~~python
+exec(open("/path/to/oofem-salome-plugin/examples/salome_contact_2d_test.py").read())
+~~~
+
+Assign `Quad1PlaneStrain` to the quadrangles, use a compressible
+Mooney-Rivlin material on `BODIES`, set that cross-section assignment's
+**Element nlgeo** to **Enabled**, constrain `FIX_LOWER` and `FIX_UPPER`, and
+create a frictionless pair from `CONTACT_MASTER` to `CONTACT_SLAVE`. Adding the
+pair selects and locks the current-OOFEM contact preset automatically; no
+solver implementation/profile choice is exposed. For a small-strain elastic
+contact model, leave **Element nlgeo** disabled or inherited.
+
 ### 4. MED conversion
 
 OOFEM writes VTK directly. MED conversion is optional and requires meshio in
@@ -315,6 +426,25 @@ The plugin activates ParaVis and uses SALOME's pvsimple API to open
 the complete time series. OOFEM's text .out remains available in the result
 list for inspection but is not sent to ParaVis.
 
+Each **Generate & Run** operation creates:
+
+~~~text
+<results>/oofem-runs/<project-id>/<run-id>/
+  run.json
+  solver.log
+  input/<model>.in
+  results/<model>.out[.m0.pvd/.vtu/...]
+~~~
+
+`run.json` contains the project snapshot, input SHA-256, exact solver
+command and detected `oofem -v` provenance, timestamps, exit state, and
+result metadata. Result hashing uses a 64 MiB total synchronous budget; larger
+artifacts retain size and modification-time provenance without freezing the
+SALOME GUI. Registered inputs, logs, result files, and result directories are
+made read-only. Rerunning always creates a new run and records its
+`source_run_id`. MED conversion is deliberately saved outside this immutable
+archive.
+
 ## Integration status and roadmap
 
 The basic local structural workflow is integrated end to end: select a SMESH
@@ -323,23 +453,28 @@ multi-component conditions, validate references, generate atomically, run or
 cancel OOFEM, persist the project per study, and inspect native VTK output in
 ParaVis.
 
-The next implementation priorities are:
+Run history/provenance, multiple retained runs, PVD time-step/field summaries,
+dead weight, uniform temperature loads, and constant structural initial
+conditions are now implemented. Current-OOFEM 2D/3D penalty contact is also
+implemented with automatic solver setup. The next priorities are:
 
-1. **Run history and reproducibility** — immutable timestamped run directories,
-   a JSON run manifest (input hash, executable/version, command, exit state),
-   rerun/duplicate actions, and explicit cleanup.
-2. **Broader OOFEM records** — body/temperature loads, initial conditions,
-   nonlinear solution controls, transient dynamics, and more cross-section,
-   material, and element families. Each new record must have exporter and real
-   solver tests.
-3. **Result model** — expose fields and time steps in an OOFEM result tree,
-   retain multiple runs, and improve MED export while keeping PVD/VTU the
-   native path.
+1. **Nonlinear and transient analyses** — nonlinear solution controls,
+   `DIIDynamic`/transient dynamics, physically exercised velocity and
+   acceleration initial conditions, and restart/checkpoint support.
+2. **Broader OOFEM records** — thermal gradients for beam/plate/shell
+   families, more cross sections, materials, elements, coupled-field records,
+   and capability-gated advanced contact/search/result options. Each addition
+   must retain exporter and real-solver tests.
+3. **Result tree and comparisons** — a hierarchical fields/time-step browser,
+   side-by-side run comparison, plots/probes, and improved MED export while
+   keeping PVD/VTU native.
 4. **SALOME interaction** — create/select SMESH groups from the OOFEM module,
    highlight invalid assignments in the 3D view, and provide a guided
    mesh-to-analysis wizard.
 5. **Production execution** — local job queue, progress/state persistence,
-   optional remote/HPC runner, provenance, and recovery after SALOME restarts.
+   optional remote/HPC runner, and automatic detection of externally finished
+   jobs after SALOME restarts. Manual stale-run recovery is already available
+   through **Mark Interrupted**.
 6. **Release engineering** — one generated version source for CMake/Python/XML,
    hosted unit/install CI plus a serial self-hosted SALOME smoke test.
 

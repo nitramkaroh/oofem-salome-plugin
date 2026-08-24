@@ -7,6 +7,7 @@ from OOFEMSalomePlugin.OOFEMDebugConsole import DebugConsole
 from OOFEMSalomePlugin.OOFEMProject import (
     PROJECT_SCHEMA_VERSION,
     migrate_project_state,
+    parse_project_schema_version,
 )
 from OOFEMSalomePlugin.OOFEMState import OOFEMState, STATE_FILE_NAME
 
@@ -49,11 +50,17 @@ def _study_key(study):
 
 def _prepare_loaded_state(state):
     """Migrate only persisted legacy data; retain canonical object identity."""
-    version = state.get("schema_version")
-    try:
-        is_legacy = version is None or int(version) < PROJECT_SCHEMA_VERSION
-    except (TypeError, ValueError):
-        is_legacy = True
+    numeric_version = parse_project_schema_version(
+        state.get("schema_version")
+    )
+    if numeric_version is not None and numeric_version > PROJECT_SCHEMA_VERSION:
+        raise ValueError(
+            "OOFEM project schema version {} is newer than supported version "
+            "{}.".format(numeric_version, PROJECT_SCHEMA_VERSION)
+        )
+    is_legacy = (
+        numeric_version is None or numeric_version < PROJECT_SCHEMA_VERSION
+    )
     if is_legacy:
         return migrate_project_state(state)
     return state
@@ -311,8 +318,16 @@ class OOFEMModule:
             state = OOFEMState.load_file(filename)
             if state is None:
                 continue
+            try:
+                prepared_state = _prepare_loaded_state(state)
+            except (TypeError, ValueError) as error:
+                _logger.warning(
+                    "Refusing to load an unsupported OOFEM project state: %s",
+                    error,
+                )
+                return False
             self.study_url = url or ""
-            self.set_study_state(_prepare_loaded_state(state), refresh=True)
+            self.set_study_state(prepared_state, refresh=True)
             return True
         return False
 

@@ -25,6 +25,10 @@ def load_boundary_condition_templates():
     return _load_object("OOFEMBCs.json").get("boundary_conditions", [])
 
 
+def load_initial_condition_templates():
+    return _load_object("OOFEMBCs.json").get("initial_conditions", [])
+
+
 def load_analysis_templates():
     return _load_object("OOFEMAnalyses.json").get("analyses", [])
 
@@ -49,7 +53,7 @@ def solver_settings(preset_id=None):
     selected = next(
         (preset for preset in presets if preset.get("id") == preset_id), presets[0]
     )
-    return {
+    settings = {
         "engng_model": selected.get("engng_model", "StaticStructural"),
         "nsteps": int(selected.get("nsteps", 1)),
         "vtk": bool(selected.get("vtk", False)),
@@ -59,3 +63,15 @@ def solver_settings(preset_id=None):
         ),
         "nlgeom": bool(selected.get("nlgeom", False)),
     }
+    for key in (
+        "rtolv",
+        "maxiter",
+        "manrmsteps",
+        "initialguess",
+        "smtype",
+        "stiffmode",
+        "renumber",
+    ):
+        if selected.get(key) is not None:
+            settings[key] = selected[key]
+    return settings

@@ -6,6 +6,7 @@ from OOFEMSalomePlugin.OOFEMQt import Qt, QtCore, QtWidgets
 from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
+from OOFEMSalomePlugin.OOFEMContactDialog import OOFEMContactDialog
 from OOFEMSalomePlugin.OOFEMCrossSectionDialog import OOFEMCrossSectionDialog
 from OOFEMSalomePlugin.OOFEMTimeFunctionDialog import OOFEMTimeFunctionDialog
 from OOFEMSalomePlugin.OOFEMProject import (
@@ -24,6 +25,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.material_templates = []
         self.material_library = []
         self.bc_templates = []
+        self.initial_condition_templates = []
         self.solver_presets = []
         self.analysis_templates = []
         self.cross_section_templates = []
@@ -33,6 +35,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self._solver_output_buffer = ""
         self._solver_cancelled = False
         self._solver_timed_out = False
+        self._run_manager = None
+        self._run_manager_root = ""
+        self._active_run = None
+        self._active_run_manager = None
+        self._run_terminal_recorded = False
         self.solverTimeoutTimer = QtCore.QTimer(self)
         self.solverTimeoutTimer.setSingleShot(True)
         self.solverTimeoutTimer.timeout.connect(self._solverTimedOut)
@@ -173,9 +180,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         cs_buttons.addWidget(self.removeCrossSectionBtn)
         cs_layout.addLayout(cs_buttons)
         self.crossSectionTable = QtWidgets.QTableWidget()
-        self.crossSectionTable.setColumnCount(4)
+        self.crossSectionTable.setColumnCount(5)
         self.crossSectionTable.setHorizontalHeaderLabels(
-            ["Name", "OOFEM Type", "Material", "Assigned Group"]
+            ["Name", "OOFEM Type", "Material", "Assigned Group", "nlgeo"]
         )
         self.crossSectionTable.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectRows
@@ -226,6 +233,87 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         bc_layout.addStretch()
         self.tabs.addTab(bc_tab, "Boundary Conditions")
 
+        ic_tab = QtWidgets.QWidget()
+        ic_layout = QtWidgets.QVBoxLayout(ic_tab)
+        ic_buttons = QtWidgets.QHBoxLayout()
+        self.addInitialConditionBtn = QtWidgets.QPushButton(
+            "Add Initial Condition"
+        )
+        self.addInitialConditionBtn.clicked.connect(self.addInitialCondition)
+        ic_buttons.addWidget(self.addInitialConditionBtn)
+        self.editInitialConditionBtn = QtWidgets.QPushButton(
+            "Edit Initial Condition"
+        )
+        self.editInitialConditionBtn.clicked.connect(self.editInitialCondition)
+        ic_buttons.addWidget(self.editInitialConditionBtn)
+        self.removeInitialConditionBtn = QtWidgets.QPushButton(
+            "Remove Initial Condition"
+        )
+        self.removeInitialConditionBtn.clicked.connect(
+            self.removeInitialCondition
+        )
+        ic_buttons.addWidget(self.removeInitialConditionBtn)
+        ic_layout.addLayout(ic_buttons)
+        self.initialConditionTable = QtWidgets.QTableWidget()
+        self.initialConditionTable.setColumnCount(4)
+        self.initialConditionTable.setHorizontalHeaderLabels(
+            ["Name", "OOFEM Type", "Assigned Group", "Conditions"]
+        )
+        self.initialConditionTable.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.initialConditionTable.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.initialConditionTable.doubleClicked.connect(
+            self.editInitialCondition
+        )
+        ic_layout.addWidget(self.initialConditionTable)
+        ic_note = QtWidgets.QLabel(
+            "Initial displacement (u), velocity (v), and acceleration (a) are "
+            "stored independently of load-time functions. Non-zero v/a needs "
+            "a dynamic engineering model."
+        )
+        ic_note.setWordWrap(True)
+        ic_layout.addWidget(ic_note)
+        self.tabs.addTab(ic_tab, "Initial Conditions")
+
+        contact_tab = QtWidgets.QWidget()
+        contact_layout = QtWidgets.QVBoxLayout(contact_tab)
+        contact_buttons = QtWidgets.QHBoxLayout()
+        self.addContactBtn = QtWidgets.QPushButton("Add Contact Pair")
+        self.addContactBtn.clicked.connect(self.addContact)
+        contact_buttons.addWidget(self.addContactBtn)
+        self.editContactBtn = QtWidgets.QPushButton("Edit Contact Pair")
+        self.editContactBtn.clicked.connect(self.editContact)
+        contact_buttons.addWidget(self.editContactBtn)
+        self.removeContactBtn = QtWidgets.QPushButton("Remove Contact Pair")
+        self.removeContactBtn.clicked.connect(self.removeContact)
+        contact_buttons.addWidget(self.removeContactBtn)
+        contact_layout.addLayout(contact_buttons)
+        self.contactTable = QtWidgets.QTableWidget()
+        self.contactTable.setColumnCount(6)
+        self.contactTable.setHorizontalHeaderLabels(
+            ["Name", "Master", "Slave", "pn", "Friction", "Two-pass"]
+        )
+        self.contactTable.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.contactTable.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.contactTable.doubleClicked.connect(self.editContact)
+        contact_layout.addWidget(self.contactTable)
+        contact_note = QtWidgets.QLabel(
+            "Use SALOME edge groups for 2D or face groups for 3D. The exporter "
+            "derives outward orientation from the owning continuum facet; use "
+            "the reverse options only for the opposite contact-search normal. "
+            "Start penalty calibration with frictionless contact."
+        )
+        contact_note.setWordWrap(True)
+        contact_layout.addWidget(contact_note)
+        self.tabs.addTab(contact_tab, "Contacts")
+
         # Tab 4: validated export and non-blocking solver execution
         export_tab = QtWidgets.QWidget()
         export_layout = QtWidgets.QVBoxLayout(export_tab)
@@ -244,6 +332,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.browseExecutableBtn = QtWidgets.QPushButton("Browse…")
         self.browseExecutableBtn.clicked.connect(self.browseOOFEMExecutable)
         executable_layout.addWidget(self.browseExecutableBtn)
+        self.checkSolverBtn = QtWidgets.QPushButton("Check Solver")
+        self.checkSolverBtn.clicked.connect(self.checkSolver)
+        executable_layout.addWidget(self.checkSolverBtn)
         export_form.addRow("OOFEM executable:", executable_layout)
 
         input_layout = QtWidgets.QHBoxLayout()
@@ -256,6 +347,13 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         input_layout.addWidget(self.browseInputBtn)
         export_form.addRow("Input file:", input_layout)
         export_layout.addLayout(export_form)
+
+        self.solverProvenanceLabel = QtWidgets.QLabel(
+            "Solver not checked. Use Check Solver to display the executable's "
+            "version and any repository, branch, and hash metadata it reports."
+        )
+        self.solverProvenanceLabel.setWordWrap(True)
+        export_layout.addWidget(self.solverProvenanceLabel)
 
         export_buttons = QtWidgets.QHBoxLayout()
         self.validateBtn = QtWidgets.QPushButton("Validate")
@@ -287,7 +385,39 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         # Tab 5: discover and open native OOFEM VTK output.
         post_tab = QtWidgets.QWidget()
         post_layout = QtWidgets.QVBoxLayout(post_tab)
-        post_layout.addWidget(QtWidgets.QLabel("Result files for the current input:"))
+        history_group = QtWidgets.QGroupBox("Run History")
+        history_layout = QtWidgets.QVBoxLayout(history_group)
+        history_select = QtWidgets.QHBoxLayout()
+        history_select.addWidget(QtWidgets.QLabel("Run:"))
+        self.runHistoryCombo = QtWidgets.QComboBox()
+        self.runHistoryCombo.currentIndexChanged.connect(
+            self.onRunHistoryChanged
+        )
+        history_select.addWidget(self.runHistoryCombo)
+        self.refreshHistoryBtn = QtWidgets.QPushButton("Refresh History")
+        self.refreshHistoryBtn.clicked.connect(self.refreshRunHistory)
+        history_select.addWidget(self.refreshHistoryBtn)
+        history_layout.addLayout(history_select)
+        history_buttons = QtWidgets.QHBoxLayout()
+        self.rerunBtn = QtWidgets.QPushButton("Rerun as New")
+        self.rerunBtn.clicked.connect(self.rerunSelectedRun)
+        history_buttons.addWidget(self.rerunBtn)
+        self.markInterruptedBtn = QtWidgets.QPushButton("Mark Interrupted")
+        self.markInterruptedBtn.setEnabled(False)
+        self.markInterruptedBtn.clicked.connect(
+            self.markSelectedRunInterrupted
+        )
+        history_buttons.addWidget(self.markInterruptedBtn)
+        self.deleteRunBtn = QtWidgets.QPushButton("Delete Selected Run…")
+        self.deleteRunBtn.clicked.connect(self.deleteSelectedRun)
+        history_buttons.addWidget(self.deleteRunBtn)
+        history_layout.addLayout(history_buttons)
+        self.runSummaryLabel = QtWidgets.QLabel("No recorded run selected.")
+        self.runSummaryLabel.setWordWrap(True)
+        history_layout.addWidget(self.runSummaryLabel)
+        post_layout.addWidget(history_group)
+
+        post_layout.addWidget(QtWidgets.QLabel("Run files and results:"))
         self.resultList = QtWidgets.QListWidget()
         post_layout.addWidget(self.resultList)
         post_buttons = QtWidgets.QHBoxLayout()
@@ -339,12 +469,17 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         try:
             from OOFEMSalomePlugin.OOFEMConfig import (
                 load_boundary_condition_templates,
+                load_initial_condition_templates,
             )
 
             self.bc_templates = load_boundary_condition_templates()
+            self.initial_condition_templates = (
+                load_initial_condition_templates()
+            )
         except Exception as error:
             print("Error loading BC templates: {}".format(error))
             self.bc_templates = []
+            self.initial_condition_templates = []
 
     def loadProjectTemplates(self):
         """Load engineering models, cross sections, and time functions."""
@@ -383,6 +518,13 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 self.solverPresetCombo.addItem(
                     preset.get("display_name", preset["id"]), preset["id"]
                 )
+                description = preset.get("description")
+                if description:
+                    self.solverPresetCombo.setItemData(
+                        self.solverPresetCombo.count() - 1,
+                        description,
+                        Qt.ToolTipRole,
+                    )
         except Exception as error:
             print("Error loading solver presets: {}".format(error))
             self.solver_presets = []
@@ -394,6 +536,16 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
     def populateAll(self, checked=False, study=None, state=None):
         """Load the active study and rebuild all controls."""
+        if self.solverProcess is not None and (
+            self.solverProcess.state() != QtCore.QProcess.NotRunning
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "OOFEM Solve in Progress",
+                "Cancel or finish the active OOFEM solve before refreshing or "
+                "switching the SALOME study.",
+            )
+            return
         current_study = study
         if current_study is None:
             try:
@@ -434,9 +586,24 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["element_mapping"].setdefault(salome_type, oofem_type)
         self.state.setdefault("materials", [])
         self.state.setdefault("cross_sections", [])
+        for cross_section in self.state["cross_sections"]:
+            if not isinstance(cross_section, dict):
+                continue
+            element_options = cross_section.get("element_options")
+            if element_options is None:
+                element_options = {}
+                cross_section["element_options"] = element_options
+            if isinstance(element_options, dict):
+                element_options.setdefault("nlgeo", "inherit")
         self.state.setdefault("time_functions", [])
         self.state.setdefault("bcs", [])
+        self.state.setdefault("initial_conditions", [])
+        self.state.setdefault("contacts", [])
         self.state.setdefault("analysis", {})
+        if not self.state.get("project_id"):
+            self.state["project_id"] = uuid.uuid4().hex
+        self.state.setdefault("last_run_id", "")
+        self.state.setdefault("run_history_root", "")
         self.state.setdefault(
             "solver_preset",
             self.solverPresetCombo.itemData(0)
@@ -456,12 +623,16 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateMaterials()
         self.populateCrossSections()
         self.populateBCs()
+        self.populateInitialConditions()
+        self.populateContacts()
         preset_index = self.solverPresetCombo.findData(self.state["solver_preset"])
         if preset_index >= 0:
             self.solverPresetCombo.setCurrentIndex(preset_index)
         self.oofemExecutableEdit.setText(self.state["oofem_executable"])
         self.inputFileEdit.setText(self.state["last_input_file"])
+        self._ensureContactSolverSetup()
         self.last_export_file = self.state["last_input_file"]
+        self.refreshRunHistory()
         self.refreshResults()
 
         mesh_count = self.meshCombo.count()
@@ -782,10 +953,17 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             return
         function_id = existing.get("id")
         references = [
-            boundary_condition.get("name", "Unnamed")
+            "boundary condition '{}'".format(
+                boundary_condition.get("name", "Unnamed")
+            )
             for boundary_condition in self.state.get("bcs", [])
             if boundary_condition.get("time_function_id") == function_id
         ]
+        references.extend(
+            "contact '{}'".format(contact.get("name", "Unnamed"))
+            for contact in self.state.get("contacts", [])
+            if contact.get("time_function_id") == function_id
+        )
         if references:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -858,6 +1036,21 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                     cross_section.get("assigned_group", "")
                 ),
             )
+            element_options = cross_section.get("element_options")
+            if not isinstance(element_options, dict):
+                element_options = {}
+            nlgeo_mode = str(
+                element_options.get("nlgeo", "inherit")
+            ).strip().casefold()
+            nlgeo_display = {"inherit": "Inherit", "on": "On", "off": "Off"}.get(
+                nlgeo_mode,
+                "[invalid] {}".format(element_options.get("nlgeo")),
+            )
+            self.crossSectionTable.setItem(
+                row,
+                4,
+                QtWidgets.QTableWidgetItem(nlgeo_display),
+            )
 
     def _selectedCrossSection(self):
         selected = self.crossSectionTable.selectedItems()
@@ -923,9 +1116,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if data and self._crossSectionAssignmentAvailable(
             data, ignored_id=existing.get("id")
         ):
-            data["id"] = existing.get("id")
+            merged = dict(existing)
+            merged.update(data)
+            merged["id"] = existing.get("id")
             existing.clear()
-            existing.update(data)
+            existing.update(merged)
             self.populateCrossSections()
 
     def removeCrossSection(self):
@@ -959,6 +1154,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             "oofem_type": "simplecs",
             "material_id": material.get("id"),
             "assigned_group": material.get("assigned_group"),
+            "element_options": {"nlgeo": "inherit"},
             "element_mapping_override": material.get(
                 "element_mapping_override"
             ),
@@ -1251,6 +1447,259 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.state['bcs'] = [m for m in self.state['bcs'] if m.get('id') != bc_id]
         self.populateBCs()
 
+    # ---------------------------
+    # Initial conditions
+    # ---------------------------
+    def populateInitialConditions(self):
+        self.initialConditionTable.setRowCount(0)
+        for initial_condition in self.state.get("initial_conditions", []):
+            row = self.initialConditionTable.rowCount()
+            self.initialConditionTable.insertRow(row)
+            name_item = QtWidgets.QTableWidgetItem(
+                initial_condition.get("name", "Unnamed")
+            )
+            name_item.setData(Qt.UserRole, initial_condition.get("id"))
+            parameters = initial_condition.get("params") or {}
+            dofs = ", ".join(str(value) for value in parameters.get("dofs", []))
+            conditions = parameters.get("conditions") or {}
+            condition_text = ", ".join(
+                "{}={}".format(mode, conditions[mode])
+                for mode in ("u", "v", "a")
+                if mode in conditions
+            )
+            if dofs:
+                condition_text = "DOFs {}: {}".format(dofs, condition_text)
+            self.initialConditionTable.setItem(row, 0, name_item)
+            self.initialConditionTable.setItem(
+                row,
+                1,
+                QtWidgets.QTableWidgetItem(
+                    initial_condition.get("oofem_type", "")
+                ),
+            )
+            self.initialConditionTable.setItem(
+                row,
+                2,
+                QtWidgets.QTableWidgetItem(
+                    initial_condition.get("assigned_group", "")
+                ),
+            )
+            self.initialConditionTable.setItem(
+                row, 3, QtWidgets.QTableWidgetItem(condition_text)
+            )
+
+    def _selectedInitialCondition(self):
+        selected = self.initialConditionTable.selectedItems()
+        if not selected:
+            return None
+        entity_id = selected[0].data(Qt.UserRole)
+        return next(
+            (
+                item
+                for item in self.state.get("initial_conditions", [])
+                if item.get("id") == entity_id
+            ),
+            None,
+        )
+
+    def addInitialCondition(self):
+        data = OOFEMBCDialog.run(
+            self.initial_condition_templates,
+            self.getMeshGroups(),
+            parent=self,
+            entity_label="Initial Condition",
+            use_time_function=False,
+        )
+        if data:
+            data["id"] = "ic-{}".format(uuid.uuid4())
+            self.state.setdefault("initial_conditions", []).append(data)
+            self.populateInitialConditions()
+
+    def editInitialCondition(self, *unused):
+        del unused
+        existing = self._selectedInitialCondition()
+        if existing is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Initial Condition",
+                "Select an initial condition to edit.",
+            )
+            return
+        data = OOFEMBCDialog.run(
+            self.initial_condition_templates,
+            self.getMeshGroups(),
+            existing_bc=existing,
+            parent=self,
+            entity_label="Initial Condition",
+            use_time_function=False,
+        )
+        if data:
+            data["id"] = existing.get("id")
+            existing.clear()
+            existing.update(data)
+            self.populateInitialConditions()
+
+    def removeInitialCondition(self):
+        existing = self._selectedInitialCondition()
+        if existing is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Initial Condition",
+                "Select an initial condition to remove.",
+            )
+            return
+        entity_id = existing.get("id")
+        self.state["initial_conditions"] = [
+            item
+            for item in self.state.get("initial_conditions", [])
+            if item.get("id") != entity_id
+        ]
+        self.populateInitialConditions()
+
+    # ---------------------------
+    # Structural contact pairs
+    # ---------------------------
+    def populateContacts(self):
+        self.contactTable.setRowCount(0)
+        for contact in self.state.get("contacts", []):
+            row = self.contactTable.rowCount()
+            self.contactTable.insertRow(row)
+            parameters = contact.get("params") or {}
+            values = (
+                contact.get("name", "Unnamed"),
+                contact.get("master_group", ""),
+                contact.get("slave_group", ""),
+                parameters.get("normal_penalty", parameters.get("pn", "")),
+                parameters.get("friction", 0.0),
+                "yes" if parameters.get("two_pass") else "no",
+            )
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(str(value))
+                item.setData(Qt.UserRole, contact.get("id"))
+                self.contactTable.setItem(row, column, item)
+
+    def _ensureContactSolverSetup(self, reset_steps=False):
+        """Apply the one supported current-OOFEM contact solver setup."""
+        has_contacts = bool(self.state.get("contacts", []))
+        self.solverPresetCombo.setEnabled(not has_contacts)
+        self.analysisCombo.setEnabled(not has_contacts)
+        if not has_contacts:
+            return
+
+        from OOFEMSalomePlugin.OOFEMConfig import solver_settings
+
+        # Contact uses its own nonlinear iteration/output preset but must not
+        # change continuum kinematics. Materialize an inherited large-strain
+        # default before switching presets; explicit on/off values are kept.
+        materialized_nlgeo = False
+        if solver_settings(
+            self.solverPresetCombo.currentData()
+        ).get("nlgeom") is True:
+            for cross_section in self.state.get("cross_sections", []):
+                if not isinstance(cross_section, dict):
+                    continue
+                element_options = cross_section.get("element_options")
+                if element_options is None:
+                    element_options = {}
+                    cross_section["element_options"] = element_options
+                if not isinstance(element_options, dict):
+                    continue
+                mode = str(
+                    element_options.get("nlgeo", "inherit")
+                ).strip().casefold()
+                if mode == "inherit":
+                    element_options["nlgeo"] = "on"
+                    materialized_nlgeo = True
+
+        static_analysis = self.analysisCombo.findData("staticstructural")
+        if (
+            static_analysis >= 0
+            and self.analysisCombo.currentIndex() != static_analysis
+        ):
+            self.analysisCombo.setCurrentIndex(static_analysis)
+        contact_preset = self.solverPresetCombo.findData("contact-static-vtk")
+        if contact_preset >= 0:
+            self.solverPresetCombo.setCurrentIndex(contact_preset)
+
+        preset_steps = solver_settings("contact-static-vtk").get("nsteps", 10)
+        analysis_params = self.state.setdefault("analysis", {}).setdefault(
+            "params", {}
+        )
+        try:
+            current_steps = int(analysis_params.get("nsteps", 1))
+        except (TypeError, ValueError):
+            current_steps = 1
+        if reset_steps or current_steps <= 1:
+            analysis_params["nsteps"] = int(preset_steps)
+            self.populateAnalysisDetails()
+        if materialized_nlgeo:
+            self.populateCrossSections()
+
+    def _selectedContact(self):
+        selected = self.contactTable.selectedItems()
+        if not selected:
+            return None
+        contact_id = selected[0].data(Qt.UserRole)
+        return next(
+            (
+                contact
+                for contact in self.state.get("contacts", [])
+                if contact.get("id") == contact_id
+            ),
+            None,
+        )
+
+    def addContact(self, *unused):
+        del unused
+        data = OOFEMContactDialog.run(
+            self.getMeshGroups().get("boundaries", []),
+            time_functions=self.state.get("time_functions", []),
+            parent=self,
+        )
+        if data:
+            data["id"] = "contact-{}".format(uuid.uuid4())
+            self.state.setdefault("contacts", []).append(data)
+            self._ensureContactSolverSetup(reset_steps=True)
+            self.populateContacts()
+
+    def editContact(self, *unused):
+        del unused
+        existing = self._selectedContact()
+        if existing is None:
+            QtWidgets.QMessageBox.warning(
+                self, "OOFEM Contact", "Select a contact pair to edit."
+            )
+            return
+        data = OOFEMContactDialog.run(
+            self.getMeshGroups().get("boundaries", []),
+            time_functions=self.state.get("time_functions", []),
+            existing_contact=existing,
+            parent=self,
+        )
+        if data:
+            data["id"] = existing.get("id")
+            existing.clear()
+            existing.update(data)
+            self._ensureContactSolverSetup()
+            self.populateContacts()
+
+    def removeContact(self, *unused):
+        del unused
+        existing = self._selectedContact()
+        if existing is None:
+            QtWidgets.QMessageBox.warning(
+                self, "OOFEM Contact", "Select a contact pair to remove."
+            )
+            return
+        contact_id = existing.get("id")
+        self.state["contacts"] = [
+            contact
+            for contact in self.state.get("contacts", [])
+            if contact.get("id") != contact_id
+        ]
+        self._ensureContactSolverSetup()
+        self.populateContacts()
+
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
         if self._block_signals or column != 1:
@@ -1389,14 +1838,18 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.state["oofem_executable"] = self.oofemExecutableEdit.text().strip()
         self.state["last_input_file"] = self.inputFileEdit.text().strip()
 
-    def _selectedSolverSettings(self):
+    def _selectedSolverSettings(self, output_directory=None):
         from OOFEMSalomePlugin.OOFEMConfig import solver_settings
 
         settings = solver_settings(self.solverPresetCombo.currentData())
-        results_directory = os.environ.get("OOFEM_RESULTS_DIRECTORY", "").strip()
+        results_directory = output_directory
+        if results_directory is None:
+            results_directory = os.environ.get(
+                "OOFEM_RESULTS_DIRECTORY", ""
+            ).strip()
         if results_directory:
             settings["output_directory"] = os.path.abspath(
-                os.path.expanduser(results_directory)
+                os.path.expanduser(str(results_directory))
             )
         return settings
 
@@ -1425,6 +1878,41 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.oofemExecutableEdit.setText(filename)
             self._solverSettingsChanged()
 
+    def checkSolver(self, *unused, **options):
+        """Resolve and probe the executable without running a model."""
+        del unused
+        show_message = bool(options.get("show_message", True))
+        from OOFEMSalomePlugin.OOFEMRunner import (
+            probe_solver_version,
+            resolve_executable,
+        )
+
+        executable = resolve_executable(self.oofemExecutableEdit.text().strip())
+        if executable is None:
+            message = (
+                "OOFEM executable was not found. Select it or configure "
+                "OOFEM_BIN in SALOME preferences."
+            )
+            self.solverProvenanceLabel.setText(message)
+            if show_message:
+                QtWidgets.QMessageBox.warning(self, "OOFEM Solver Check", message)
+            return None
+
+        self.oofemExecutableEdit.setText(executable)
+        self._solverSettingsChanged()
+        provenance = probe_solver_version(executable)
+        version_text = provenance or "The executable did not report version metadata."
+        message = "{}\n{}".format(executable, version_text)
+        self.solverProvenanceLabel.setText(message)
+        if show_message and provenance is None:
+            QtWidgets.QMessageBox.warning(
+                self, "OOFEM Solver Check", message
+            )
+        return {
+            "executable": executable,
+            "provenance": provenance,
+        }
+
     def browseInputFile(self):
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
@@ -1435,11 +1923,12 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if filename:
             if not os.path.splitext(filename)[1]:
                 filename += ".in"
+            self._clearRunSelection()
             self.inputFileEdit.setText(filename)
             self._solverSettingsChanged()
             self.refreshResults()
 
-    def _makeExporter(self):
+    def _makeExporter(self, solver_settings=None):
         if self.study is None:
             raise RuntimeError("Plugin not initialized. Click Refresh first.")
         mesh_id = self.meshCombo.currentData()
@@ -1451,6 +1940,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
         from OOFEMSalomePlugin.OOFEMExporter import OOFEMExporter
 
+        self._ensureContactSolverSetup()
         self.collectElementMapping()
         cross_sections = self.state.get("cross_sections", [])
         if not cross_sections and any(
@@ -1465,10 +1955,16 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state.get("materials", []),
             self.state.get("bcs", []),
             self.bc_templates,
-            solver_settings=self._selectedSolverSettings(),
+            solver_settings=(
+                solver_settings
+                if solver_settings is not None
+                else self._selectedSolverSettings()
+            ),
             cross_sections=cross_sections,
             time_functions=self.state.get("time_functions", []),
             analysis=self.state.get("analysis", {}),
+            initial_conditions=self.state.get("initial_conditions", []),
+            contacts=self.state.get("contacts", []),
         )
 
     def validateModel(self):
@@ -1477,7 +1973,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             message = (
                 "Valid {domain} model: {nodes} nodes, {elements} elements, "
                 "{materials} materials, {cross_sections} cross sections, "
-                "{boundary_conditions} BCs, {time_functions} time functions."
+                "{boundary_conditions} BCs, {initial_conditions} initial "
+                "conditions, {contacts} contacts, {time_functions} time "
+                "functions."
             ).format(**summary)
             self.exportSummaryLabel.setText(message)
             self.statusLabel.setText(message)
@@ -1491,12 +1989,17 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
     def _chooseInputFilename(self):
         filename = self.inputFileEdit.text().strip()
-        if filename:
+        archived_filename = filename if self._isRecordedRunInput(filename) else ""
+        if filename and not archived_filename:
             return filename
         mesh_id = self.meshCombo.currentData()
         study_object = self.study.FindObjectID(mesh_id) if self.study else None
-        default_name = "{}.in".format(
-            study_object.GetName() if study_object else "oofem-model"
+        default_name = (
+            os.path.basename(archived_filename)
+            if archived_filename
+            else "{}.in".format(
+                study_object.GetName() if study_object else "oofem-model"
+            )
         )
         preferred_directory = (
             os.environ.get("OOFEM_WORKING_DIRECTORY", "").strip()
@@ -1519,11 +2022,37 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             filename += ".in"
         return filename
 
-    def _exportModel(self):
-        filename = self._chooseInputFilename()
+    @staticmethod
+    def _isRecordedRunInput(filename):
+        """Recognize immutable ``run-*/input/*.in`` snapshots."""
+        if not filename:
+            return False
+        path = os.path.abspath(os.path.expanduser(filename))
+        input_directory = os.path.dirname(path)
+        run_directory = os.path.dirname(input_directory)
+        return (
+            os.path.basename(input_directory) == "input"
+            and os.path.basename(run_directory).startswith("run-")
+            and os.path.isfile(os.path.join(run_directory, "run.json"))
+        )
+
+    def _clearRunSelection(self):
+        self.runHistoryCombo.blockSignals(True)
+        self.runHistoryCombo.setCurrentIndex(-1)
+        self.runHistoryCombo.blockSignals(False)
+        if isinstance(self.state, dict):
+            self.state["last_run_id"] = ""
+        self.onRunHistoryChanged(-1)
+
+    def _exportModel(
+        self, filename=None, solver_settings=None, recorded_run=False
+    ):
+        filename = filename or self._chooseInputFilename()
         if not filename:
             return None
-        exporter = self._makeExporter()
+        if not recorded_run:
+            self._clearRunSelection()
+        exporter = self._makeExporter(solver_settings=solver_settings)
         summary = exporter.validate()
         result = exporter.export(filename)
         self.inputFileEdit.setText(result["input_file"])
@@ -1552,64 +2081,507 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             traceback.print_exc()
             return None
 
-    def runSolver(self):
-        try:
-            result = self._exportModel()
-            if not result:
-                return
+    def _runBaseDirectory(self, prompt=False):
+        for variable in ("OOFEM_RESULTS_DIRECTORY", "OOFEM_WORKING_DIRECTORY"):
+            value = os.environ.get(variable, "").strip()
+            if value:
+                return os.path.abspath(os.path.expanduser(value))
+        input_file = self.inputFileEdit.text().strip()
+        if input_file:
+            return os.path.dirname(os.path.abspath(os.path.expanduser(input_file)))
+        if not prompt:
+            return ""
+        candidate = self._chooseInputFilename()
+        if not candidate:
+            return ""
+        self.inputFileEdit.setText(candidate)
+        self._solverSettingsChanged()
+        return os.path.dirname(os.path.abspath(candidate))
 
-            from OOFEMSalomePlugin.OOFEMRunner import resolve_executable
+    def _runsRoot(self, prompt=False):
+        project_id = self.state.get("project_id") if isinstance(self.state, dict) else ""
+        if (
+            not isinstance(project_id, str)
+            or not (8 <= len(project_id) <= 64)
+            or any(
+                not (character.isalnum() or character in ("-", "_"))
+                for character in project_id
+            )
+        ):
+            project_id = uuid.uuid4().hex
+            self.state["project_id"] = project_id
+
+        configured_base = ""
+        for variable in ("OOFEM_RESULTS_DIRECTORY", "OOFEM_WORKING_DIRECTORY"):
+            value = os.environ.get(variable, "").strip()
+            if value:
+                configured_base = os.path.abspath(os.path.expanduser(value))
+                break
+        if configured_base:
+            return os.path.join(configured_base, "oofem-runs", project_id)
+
+        persisted_root = (
+            self.state.get("run_history_root", "")
+            if isinstance(self.state, dict)
+            else ""
+        )
+        normalized_persisted_root = (
+            os.path.abspath(os.path.expanduser(persisted_root))
+            if persisted_root
+            else ""
+        )
+        if (
+            normalized_persisted_root
+            and os.path.isdir(normalized_persisted_root)
+            and os.path.basename(normalized_persisted_root) == project_id
+            and os.path.basename(
+                os.path.dirname(normalized_persisted_root)
+            ) == "oofem-runs"
+        ):
+            return normalized_persisted_root
+        if persisted_root:
+            self.state["run_history_root"] = ""
+
+        input_file = self.inputFileEdit.text().strip()
+        if input_file:
+            input_directory = os.path.dirname(os.path.abspath(input_file))
+            run_directory = (
+                os.path.dirname(input_directory)
+                if os.path.basename(input_directory) == "input"
+                else input_directory
+            )
+            possible_root = os.path.dirname(run_directory)
+            if (
+                os.path.basename(possible_root) == project_id
+                and os.path.basename(os.path.dirname(possible_root)) == "oofem-runs"
+            ):
+                return possible_root
+
+        base_directory = self._runBaseDirectory(prompt=prompt)
+        if not base_directory:
+            return ""
+        return os.path.join(base_directory, "oofem-runs", project_id)
+
+    def _getRunManager(self, prompt=False):
+        root = self._runsRoot(prompt=prompt)
+        if not root:
+            return None
+        if not prompt and not os.path.isdir(root):
+            return None
+        if self._run_manager is None or self._run_manager_root != root:
+            from OOFEMSalomePlugin.OOFEMRunManager import OOFEMRunManager
+
+            try:
+                self._run_manager = OOFEMRunManager(root)
+            except (OSError, RuntimeError, ValueError):
+                self._run_manager = None
+                self._run_manager_root = ""
+                if prompt:
+                    raise
+                return None
+            self._run_manager_root = root
+            self.state["run_history_root"] = root
+        return self._run_manager
+
+    def _selectedRunManifest(self):
+        run_id = self.runHistoryCombo.currentData()
+        if not run_id:
+            return None
+        manager = self._getRunManager()
+        if manager is None:
+            return None
+        try:
+            return manager.load_run(str(run_id))
+        except (OSError, RuntimeError, ValueError, KeyError):
+            return None
+
+    def _selectedRunDirectory(self):
+        run_id = self.runHistoryCombo.currentData()
+        manager = self._getRunManager()
+        if not run_id or manager is None:
+            return ""
+        try:
+            return manager.run_directory(str(run_id))
+        except (OSError, RuntimeError, ValueError, KeyError):
+            return ""
+
+    @staticmethod
+    def _manifestInputPath(run_directory, manifest):
+        input_record = manifest.get("input", {}) if isinstance(manifest, dict) else {}
+        path = input_record.get("path") if isinstance(input_record, dict) else ""
+        if not path:
+            return ""
+        if not os.path.isabs(path):
+            path = os.path.join(run_directory, path)
+        path = os.path.abspath(path)
+        try:
+            if os.path.commonpath(
+                (os.path.realpath(run_directory), os.path.realpath(path))
+            ) != os.path.realpath(run_directory):
+                return ""
+        except ValueError:
+            return ""
+        return path
+
+    def refreshRunHistory(self, preferred_run_id=None):
+        previous = (
+            preferred_run_id
+            or self.runHistoryCombo.currentData()
+            or (self.state.get("last_run_id") if isinstance(self.state, dict) else "")
+        )
+        self.runHistoryCombo.blockSignals(True)
+        self.runHistoryCombo.clear()
+        manifests = []
+        manager = self._getRunManager()
+        if manager is not None:
+            try:
+                manifests = manager.list_runs()
+            except (OSError, RuntimeError, ValueError):
+                manifests = []
+        for manifest in manifests:
+            if not isinstance(manifest, dict) or not manifest.get("run_id"):
+                continue
+            run_id = str(manifest["run_id"])
+            created = str(manifest.get("created_at") or "").replace("T", " ")
+            if created.endswith("Z"):
+                created = created[:-1]
+            label = "{}  [{}]  {}".format(
+                created or run_id,
+                manifest.get("status") or "unknown",
+                run_id,
+            )
+            self.runHistoryCombo.addItem(label, run_id)
+        selected_index = self.runHistoryCombo.findData(previous)
+        if selected_index < 0 and self.runHistoryCombo.count():
+            selected_index = 0
+        self.runHistoryCombo.setCurrentIndex(selected_index)
+        self.runHistoryCombo.blockSignals(False)
+        enabled = self.runHistoryCombo.count() > 0
+        self.rerunBtn.setEnabled(enabled)
+        self.deleteRunBtn.setEnabled(enabled)
+        self.onRunHistoryChanged(selected_index)
+        return manifests
+
+    def onRunHistoryChanged(self, index):
+        if index < 0:
+            self.rerunBtn.setEnabled(False)
+            self.markInterruptedBtn.setEnabled(False)
+            self.deleteRunBtn.setEnabled(False)
+            self.runSummaryLabel.setText("No recorded run selected.")
+            return
+        self.rerunBtn.setEnabled(True)
+        self.deleteRunBtn.setEnabled(True)
+        manifest = self._selectedRunManifest()
+        run_directory = self._selectedRunDirectory()
+        if not manifest or not run_directory:
+            self.markInterruptedBtn.setEnabled(False)
+            self.runSummaryLabel.setText("The selected run manifest is unavailable.")
+            return
+        run_id = str(manifest.get("run_id") or "")
+        self.markInterruptedBtn.setEnabled(
+            manifest.get("status") in ("pending", "running")
+            and not self._runIsActiveInCurrentProcess(run_id)
+        )
+        self.state["last_run_id"] = run_id
+        from OOFEMSalomePlugin.OOFEMResults import summarize_run
+
+        summary = summarize_run(run_directory, manifest)
+        point_fields = ", ".join(summary["fields"]["point"]) or "none"
+        cell_fields = ", ".join(summary["fields"]["cell"]) or "none"
+        self.runSummaryLabel.setText(
+            "Status: {status}; exit code: {exit_code}; time steps: {steps}; "
+            "point fields: {point}; cell fields: {cell}".format(
+                status=manifest.get("status") or "unknown",
+                exit_code=manifest.get("exit_code"),
+                steps=len(summary["time_steps"]),
+                point=point_fields,
+                cell=cell_fields,
+            )
+        )
+        self.refreshResults(run_summary=summary)
+
+    def rerunSelectedRun(self):
+        run_id = self.runHistoryCombo.currentData()
+        if not run_id:
+            QtWidgets.QMessageBox.warning(
+                self, "OOFEM Run History", "Select a recorded run first."
+            )
+            return
+        self.runSolver(source_run_id=str(run_id))
+
+    def _runIsActiveInCurrentProcess(self, run_id):
+        if (
+            not run_id
+            or self._active_run is None
+            or self._active_run.run_id != str(run_id)
+            or self.solverProcess is None
+        ):
+            return False
+        try:
+            return self.solverProcess.state() != QtCore.QProcess.NotRunning
+        except (AttributeError, RuntimeError):
+            return False
+
+    def markSelectedRunInterrupted(self):
+        """Finalize one stale pending/running run without stopping a process."""
+        run_id = self.runHistoryCombo.currentData()
+        manager = self._getRunManager()
+        if not run_id or manager is None:
+            return False
+        run_id = str(run_id)
+        try:
+            manifest = manager.load_run(run_id)
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            QtWidgets.QMessageBox.warning(
+                self, "Mark Interrupted OOFEM Run", str(error)
+            )
+            return False
+        if manifest.get("status") not in ("pending", "running"):
+            self.markInterruptedBtn.setEnabled(False)
+            return False
+        if self._runIsActiveInCurrentProcess(run_id):
+            self.markInterruptedBtn.setEnabled(False)
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Mark Interrupted OOFEM Run",
+                "This run is still active in the current OOFEM process. "
+                "Cancel it from Export / Solve or wait for it to finish.",
+            )
+            return False
+
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Mark Interrupted OOFEM Run",
+            "Mark run {} as interrupted and failed?\n\n"
+            "Discovered partial result files will be recorded and made "
+            "read-only. No process will be stopped; continue only if any "
+            "external OOFEM process has already ended.".format(run_id),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return False
+
+        # A QProcess signal can be delivered while the confirmation dialog is
+        # open, so re-check both the manifest and the local process afterward.
+        try:
+            manifest = manager.load_run(run_id)
+            if manifest.get("status") not in ("pending", "running"):
+                self.refreshRunHistory(preferred_run_id=run_id)
+                return False
+            if self._runIsActiveInCurrentProcess(run_id):
+                self.refreshRunHistory(preferred_run_id=run_id)
+                return False
+
+            from OOFEMSalomePlugin.OOFEMResults import discover_run_files
+
+            run_directory = manager.run_directory(run_id)
+            result_files = discover_run_files(
+                run_directory, include_auxiliary=False
+            )
+            message = (
+                "Run manually marked interrupted during stale-run recovery; "
+                "{} partial result file(s) were preserved."
+            ).format(len(result_files))
+            manager.mark_failed(
+                run_id,
+                result_files=result_files,
+                message=message,
+            )
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            QtWidgets.QMessageBox.warning(
+                self, "Mark Interrupted OOFEM Run", str(error)
+            )
+            self.refreshRunHistory(preferred_run_id=run_id)
+            return False
+
+        self.statusLabel.setText(
+            "Run {} was marked interrupted; partial results were preserved.".format(
+                run_id
+            )
+        )
+        self.refreshRunHistory(preferred_run_id=run_id)
+        return True
+
+    def deleteSelectedRun(self):
+        run_id = self.runHistoryCombo.currentData()
+        if not run_id:
+            return False
+        if (
+            self._active_run is not None
+            and self._active_run.run_id == str(run_id)
+            and self.solverProcess is not None
+            and self.solverProcess.state() != QtCore.QProcess.NotRunning
+        ):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "OOFEM Run History",
+                "A running job cannot be deleted. Cancel it first.",
+            )
+            return False
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete OOFEM Run",
+            "Delete run {} and all of its result files? This cannot be undone.".format(
+                run_id
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return False
+        manager = self._getRunManager()
+        if manager is None:
+            return False
+        try:
+            manager.delete_run(str(run_id))
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            QtWidgets.QMessageBox.warning(
+                self, "Delete OOFEM Run", str(error)
+            )
+            return False
+        if self.state.get("last_run_id") == str(run_id):
+            self.state["last_run_id"] = ""
+        self.refreshRunHistory()
+        self.refreshResults()
+        return True
+
+    def runSolver(self, source_run_id=None):
+        if isinstance(source_run_id, bool):
+            source_run_id = None
+        manager = None
+        handle = None
+        try:
+            if self.solverProcess is not None and (
+                self.solverProcess.state() != QtCore.QProcess.NotRunning
+            ):
+                raise RuntimeError("An OOFEM solve is already running.")
+
+            from OOFEMSalomePlugin.OOFEMRunner import (
+                probe_solver_version,
+                resolve_executable,
+            )
 
             executable = resolve_executable(self.oofemExecutableEdit.text().strip())
             if executable is None:
                 raise RuntimeError(
                     "OOFEM executable not found. Browse to it or set OOFEM_BIN."
                 )
-            if self.solverProcess is not None and (
-                self.solverProcess.state() != QtCore.QProcess.NotRunning
-            ):
-                raise RuntimeError("An OOFEM solve is already running.")
-
             self.oofemExecutableEdit.setText(executable)
             self._solverSettingsChanged()
+            self.collectElementMapping()
+            manager = self._getRunManager(prompt=True)
+            if manager is None:
+                return
+            command = [executable, "-f", "{input}"]
+            solver_version = probe_solver_version(executable)
+            self.solverProvenanceLabel.setText(
+                "{}\n{}".format(
+                    executable,
+                    solver_version
+                    or "The executable did not report version metadata.",
+                )
+            )
+            if source_run_id:
+                handle = manager.duplicate_run(
+                    source_run_id,
+                    solver_command=command,
+                    solver_version=solver_version,
+                )
+                result = {"input_file": handle.input_file}
+            else:
+                input_name = os.path.basename(
+                    self.inputFileEdit.text().strip() or "oofem-model.in"
+                )
+                if not input_name.lower().endswith(".in"):
+                    input_name += ".in"
+                handle = manager.reserve_run(
+                    project_state=self.state,
+                    input_name=input_name,
+                    solver_command=command,
+                    solver_version=solver_version,
+                )
+                result = self._exportModel(
+                    filename=handle.input_file,
+                    solver_settings=self._selectedSolverSettings(
+                        output_directory=handle.results_directory
+                    ),
+                    recorded_run=True,
+                )
+                if not result:
+                    manager.mark_failed(
+                        handle.run_id, message="OOFEM input export was cancelled."
+                    )
+                    self.refreshRunHistory(preferred_run_id=handle.run_id)
+                    return
+                registered = manager.register_input(
+                    handle.run_id, result["input_file"]
+                )
+                if registered is not None:
+                    handle = registered
+
+            self._active_run = handle
+            self._active_run_manager = manager
+            self._run_terminal_recorded = False
+            self.state["last_run_id"] = handle.run_id
             self.solverLog.clear()
             self._solver_output_buffer = ""
             self._solver_cancelled = False
             self._solver_timed_out = False
             self.solverProcess = QtCore.QProcess(self)
             self.solverProcess.setProcessChannelMode(QtCore.QProcess.MergedChannels)
-            working_directory = os.environ.get(
-                "OOFEM_WORKING_DIRECTORY", ""
-            ).strip()
-            working_directory = os.path.abspath(
-                os.path.expanduser(working_directory)
-            ) if working_directory else os.path.dirname(result["input_file"])
-            if not os.path.isdir(working_directory):
-                working_directory = os.path.dirname(result["input_file"])
-            self.solverProcess.setWorkingDirectory(working_directory)
-            self.solverProcess.setProgram(executable)
-            self.solverProcess.setArguments(["-f", result["input_file"]])
+            self.solverProcess.setWorkingDirectory(handle.working_directory)
+            self.solverProcess.setProgram(handle.program)
+            self.solverProcess.setArguments(handle.arguments)
             self.solverProcess.readyReadStandardOutput.connect(
                 self._readSolverOutput
             )
+            self.solverProcess.started.connect(self._solverStarted)
             self.solverProcess.finished.connect(self._solverFinished)
             self.solverProcess.errorOccurred.connect(self._solverError)
             self.runBtn.setEnabled(False)
             self.cancelRunBtn.setEnabled(True)
             self.solverLog.appendPlainText(
-                "Running: {} -f {}".format(executable, result["input_file"])
+                "Run {}: {}".format(
+                    handle.run_id, " ".join([handle.program] + handle.arguments)
+                )
             )
             self.solverProcess.start()
             timeout = self._solverTimeoutSeconds()
             self.solverTimeoutTimer.start(timeout * 1000)
             self.solverLog.appendPlainText(
                 "Timeout: {} s; working directory: {}".format(
-                    timeout, working_directory
+                    timeout, handle.working_directory
                 )
             )
+            self.refreshRunHistory(preferred_run_id=handle.run_id)
         except Exception as error:
+            if manager is not None and handle is not None:
+                try:
+                    manager.mark_failed(handle.run_id, message=str(error))
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    pass
             QtWidgets.QMessageBox.critical(self, "OOFEM Solver", str(error))
             traceback.print_exc()
+            self.refreshRunHistory(
+                preferred_run_id=handle.run_id if handle is not None else None
+            )
+
+    def _solverStarted(self):
+        if self._active_run is None:
+            return
+        manager = self._active_run_manager
+        if manager is None:
+            return
+        process_id = None
+        try:
+            process_id = int(self.solverProcess.processId()) or None
+        except (AttributeError, TypeError, ValueError):
+            pass
+        manager.mark_running(self._active_run.run_id, process_id=process_id)
+        self.refreshRunHistory(
+            preferred_run_id=self._active_run.run_id
+        )
 
     def cancelSolver(self, force=False):
         process = self.solverProcess
@@ -1623,7 +2595,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             process.kill()
         else:
             process.terminate()
-            QtCore.QTimer.singleShot(2000, self._killSolverIfRunning)
+            QtCore.QTimer.singleShot(
+                2000,
+                lambda process=process: self._killSolverIfRunning(process),
+            )
         return True
 
     def _solverTimedOut(self):
@@ -1639,24 +2614,45 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         )
         self.cancelSolver()
 
-    def _killSolverIfRunning(self):
-        if self.solverProcess is not None and (
-            self.solverProcess.state() != QtCore.QProcess.NotRunning
+    def _killSolverIfRunning(self, process=None):
+        process = process or self.solverProcess
+        if process is not None and (
+            process.state() != QtCore.QProcess.NotRunning
         ):
             self.solverLog.appendPlainText(
                 "Solver did not terminate; killing the process."
             )
-            self.solverProcess.kill()
+            process.kill()
 
     def _solverError(self, process_error):
-        self.solverTimeoutTimer.stop()
         if self._solver_cancelled:
             return
+        failed_to_start = getattr(QtCore.QProcess, "FailedToStart", 0)
+        if process_error != failed_to_start:
+            self.solverLog.appendPlainText(
+                "QProcess reported error {}; waiting for process completion.".format(
+                    process_error
+                )
+            )
+            self.statusLabel.setText(
+                "OOFEM process reported an I/O or crash error; collecting final output."
+            )
+            return
+        self.solverTimeoutTimer.stop()
+        self._recordActiveRun(
+            "failed",
+            message="QProcess error {}".format(process_error),
+        )
         self.runBtn.setEnabled(True)
         self.cancelRunBtn.setEnabled(False)
         self.statusLabel.setText(
             "Could not start or continue OOFEM (process error {}).".format(
                 process_error
+            )
+        )
+        self.refreshRunHistory(
+            preferred_run_id=(
+                self._active_run.run_id if self._active_run is not None else None
             )
         )
 
@@ -1672,6 +2668,61 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.solverLog.insertPlainText(data)
             self.solverLog.moveCursor(self.solverLog.textCursor().End)
 
+    def _recordActiveRun(
+        self, status, exit_code=None, succeeded=None, message=None
+    ):
+        if self._run_terminal_recorded:
+            return True
+        if self._active_run is None:
+            return False
+        manager = self._active_run_manager
+        if manager is None:
+            return False
+        run_id = self._active_run.run_id
+        try:
+            manager.write_solver_log(run_id, self._solver_output_buffer)
+            from OOFEMSalomePlugin.OOFEMResults import discover_run_files
+
+            result_files = discover_run_files(
+                self._active_run.directory, include_auxiliary=False
+            )
+            if status == "timed_out":
+                manager.mark_timed_out(
+                    run_id,
+                    exit_code=exit_code,
+                    result_files=result_files,
+                    message=message,
+                )
+            elif status == "cancelled":
+                manager.mark_cancelled(
+                    run_id,
+                    exit_code=exit_code,
+                    result_files=result_files,
+                    message=message,
+                )
+            elif status == "failed" and exit_code is None:
+                manager.mark_failed(
+                    run_id,
+                    result_files=result_files,
+                    message=message,
+                )
+            else:
+                manager.finish_run(
+                    run_id,
+                    exit_code=exit_code,
+                    result_files=result_files,
+                    succeeded=succeeded,
+                    message=message,
+                )
+            self._run_terminal_recorded = True
+            return True
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            traceback.print_exc()
+            self.solverLog.appendPlainText(
+                "\nRun-history finalization failed: {}".format(error)
+            )
+            return False
+
     def _solverFinished(self, exit_code, exit_status):
         del exit_status
         self._readSolverOutput()
@@ -1680,37 +2731,94 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.cancelRunBtn.setEnabled(False)
 
         if self._solver_timed_out:
-            self.statusLabel.setText("OOFEM solve timed out.")
+            recorded = self._recordActiveRun(
+                "timed_out",
+                exit_code=exit_code,
+                message="Solver exceeded the configured timeout.",
+            )
+            self.statusLabel.setText(
+                "OOFEM solve timed out."
+                if recorded
+                else "OOFEM timed out and its run manifest could not be finalized."
+            )
             self.exportSummaryLabel.setText(
-                "Solve stopped after {} seconds; partial results were preserved.".format(
-                    self._solverTimeoutSeconds()
+                "Solve stopped after {} seconds; partial results were preserved.{}".format(
+                    self._solverTimeoutSeconds(),
+                    "" if recorded else " Run-history finalization failed; see the log.",
                 )
+            )
+            self.refreshRunHistory(
+                preferred_run_id=self._active_run.run_id
             )
             self.refreshResults()
             return
 
         if self._solver_cancelled:
-            self.statusLabel.setText("OOFEM solve was cancelled.")
+            recorded = self._recordActiveRun(
+                "cancelled",
+                exit_code=exit_code,
+                message="Cancellation requested by the user.",
+            )
+            self.statusLabel.setText(
+                "OOFEM solve was cancelled."
+                if recorded
+                else "OOFEM was cancelled and its run manifest could not be finalized."
+            )
             self.exportSummaryLabel.setText(
-                "Solve cancelled; partial result files were left untouched."
+                "Solve cancelled; partial result files were left untouched.{}".format(
+                    "" if recorded else " Run-history finalization failed; see the log."
+                )
+            )
+            self.refreshRunHistory(
+                preferred_run_id=self._active_run.run_id
             )
             self.refreshResults()
             return
 
-        output = self._solver_output_buffer.lower()
-        has_summary = "error(s)" in output
-        succeeded = exit_code == 0 and (
-            not has_summary or "0 error(s)" in output
+        from OOFEMSalomePlugin.OOFEMRunner import solver_output_succeeded
+
+        succeeded = solver_output_succeeded(
+            exit_code, self._solver_output_buffer, require_summary=False
         )
         if succeeded:
-            self.statusLabel.setText("OOFEM solve completed successfully.")
-            self.exportSummaryLabel.setText(
-                "Solve complete. Open the Postprocess tab to inspect results."
+            run_recorded = self._recordActiveRun(
+                "succeeded",
+                exit_code=exit_code,
+                succeeded=True,
+                message="OOFEM reported successful completion.",
             )
+            if run_recorded:
+                self.statusLabel.setText("OOFEM solve completed successfully.")
+                self.exportSummaryLabel.setText(
+                    "Solve complete. Open the Postprocess tab to inspect results."
+                )
+            else:
+                self.statusLabel.setText(
+                    "OOFEM completed, but its run manifest could not be finalized."
+                )
+                self.exportSummaryLabel.setText(
+                    "Solver output exists, but run-history finalization failed; "
+                    "see the solver log before closing SALOME."
+                )
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "OOFEM Run History",
+                    "OOFEM completed, but the immutable run record could not be "
+                    "finalized. See the solver log.",
+                )
         else:
+            run_recorded = self._recordActiveRun(
+                "failed",
+                exit_code=exit_code,
+                succeeded=False,
+                message="OOFEM returned a failing exit code or error summary.",
+            )
             self.statusLabel.setText(
-                "OOFEM solve failed (exit code {}). See solver output.".format(
-                    exit_code
+                "OOFEM solve failed (exit code {}). See solver output.{}".format(
+                    exit_code,
+                    ""
+                    if run_recorded
+                    else " Run-history finalization also failed.",
                 )
             )
             QtWidgets.QMessageBox.critical(
@@ -1718,16 +2826,46 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 "OOFEM Solver",
                 "OOFEM did not complete successfully. See the solver output log.",
             )
+        self.refreshRunHistory(
+            preferred_run_id=(
+                self._active_run.run_id if self._active_run is not None else None
+            )
+        )
         self.refreshResults()
-        if succeeded and self._autoOpenParaVis():
+        if succeeded and run_recorded and self._autoOpenParaVis():
             if self._selectedResultPath(visualization_only=True):
                 self.openSelectedResult()
 
     # ---------------------------
     # Postprocess
     # ---------------------------
-    def refreshResults(self):
+    def refreshResults(self, run_summary=None):
+        current = self.resultList.currentItem()
+        previous_path = current.data(Qt.UserRole) if current else None
         self.resultList.clear()
+        if run_summary is None:
+            manifest = self._selectedRunManifest()
+            run_directory = self._selectedRunDirectory()
+            if manifest and run_directory:
+                from OOFEMSalomePlugin.OOFEMResults import summarize_run
+
+                run_summary = summarize_run(run_directory, manifest)
+        if run_summary is not None:
+            paths = run_summary.get("files", [])
+            run_directory = run_summary.get("run_directory", "")
+            for path in paths:
+                label = (
+                    os.path.relpath(path, run_directory)
+                    if run_directory
+                    else os.path.basename(path)
+                )
+                item = QtWidgets.QListWidgetItem(label)
+                item.setToolTip(path)
+                item.setData(Qt.UserRole, path)
+                self.resultList.addItem(item)
+            self._restoreResultSelection(previous_path)
+            return paths
+
         input_file = self.inputFileEdit.text().strip()
         if not input_file:
             return []
@@ -1739,9 +2877,33 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             item.setToolTip(path)
             item.setData(Qt.UserRole, path)
             self.resultList.addItem(item)
-        if paths:
-            self.resultList.setCurrentRow(0)
+        self._restoreResultSelection(previous_path)
         return paths
+
+    def _restoreResultSelection(self, preferred_path=None):
+        selected_row = 0 if self.resultList.count() else -1
+        if preferred_path:
+            for row in range(self.resultList.count()):
+                item = self.resultList.item(row)
+                if item.data(Qt.UserRole) == preferred_path:
+                    selected_row = row
+                    break
+        if selected_row >= 0:
+            self.resultList.setCurrentRow(selected_row)
+
+    def _verifySelectedRunArtifacts(self):
+        run_id = self.runHistoryCombo.currentData()
+        manager = self._getRunManager()
+        if not run_id or manager is None:
+            return
+        manifest = manager.load_run(str(run_id))
+        if manifest.get("status") in (
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+        ):
+            manager.load_run(str(run_id), verify_files=True)
 
     def _selectedResultPath(self, visualization_only=False):
         from OOFEMSalomePlugin.OOFEMPost import preferred_visualization_file
@@ -1749,8 +2911,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         paths = self.refreshResults()
         current = self.resultList.currentItem()
         selected = current.data(Qt.UserRole) if current else None
+        visualization_extensions = (".pvd", ".med", ".vtu", ".vtk")
         if visualization_only and (
-            not selected or selected.lower().endswith(".out")
+            not selected or not selected.lower().endswith(visualization_extensions)
         ):
             selected = preferred_visualization_file(paths)
         return selected
@@ -1762,6 +2925,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 raise RuntimeError(
                     "No VTK/PVD/MED result exists yet. Generate and run the VTK preset."
                 )
+            self._verifySelectedRunArtifacts()
             from OOFEMSalomePlugin.OOFEMModule import getModule
             from OOFEMSalomePlugin.OOFEMPost import open_in_paravis
 
@@ -1772,6 +2936,33 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         except Exception as error:
             QtWidgets.QMessageBox.critical(self, "OOFEM Postprocess", str(error))
             traceback.print_exc()
+
+    @staticmethod
+    def _pathWithin(root, path):
+        try:
+            return os.path.commonpath(
+                (os.path.realpath(root), os.path.realpath(path))
+            ) == os.path.realpath(root)
+        except (TypeError, ValueError):
+            return False
+
+    def _medConversionDefault(self, source):
+        filename = os.path.basename(os.path.splitext(source)[0]) + ".med"
+        run_directory = self._selectedRunDirectory()
+        if not run_directory or not self._pathWithin(run_directory, source):
+            return os.path.splitext(source)[0] + ".med"
+        for variable in ("OOFEM_WORKING_DIRECTORY", "OOFEM_RESULTS_DIRECTORY"):
+            configured = os.environ.get(variable, "").strip()
+            if configured:
+                return os.path.join(
+                    os.path.abspath(os.path.expanduser(configured)), filename
+                )
+        project_root = os.path.dirname(os.path.abspath(run_directory))
+        runs_container = os.path.dirname(project_root)
+        base_directory = os.path.dirname(runs_container)
+        if os.path.basename(runs_container) != "oofem-runs":
+            base_directory = os.getcwd()
+        return os.path.join(base_directory, filename)
 
     def convertSelectedResult(self):
         try:
@@ -1789,7 +2980,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 )
             if not source:
                 raise RuntimeError("No single .vtu or .vtk result is available.")
-            default_name = os.path.splitext(source)[0] + ".med"
+            self._verifySelectedRunArtifacts()
+            default_name = self._medConversionDefault(source)
             destination, _ = QtWidgets.QFileDialog.getSaveFileName(
                 self, "Convert OOFEM VTK Result to MED", default_name, "MED Files (*.med)"
             )
@@ -1797,6 +2989,12 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 return
             if not destination.lower().endswith(".med"):
                 destination += ".med"
+            run_directory = self._selectedRunDirectory()
+            if run_directory and self._pathWithin(run_directory, destination):
+                raise RuntimeError(
+                    "Save converted MED data outside the immutable recorded-run "
+                    "directory."
+                )
 
             from OOFEMSalomePlugin.OOFEMPost import convert_vtk_to_med
 

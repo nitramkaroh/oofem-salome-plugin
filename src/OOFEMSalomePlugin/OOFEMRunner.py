@@ -2,12 +2,31 @@
 
 from dataclasses import dataclass
 import os
+import re
 import shutil
 import subprocess
 
 
 class OOFEMSolverError(RuntimeError):
     pass
+
+
+_ERROR_SUMMARY_RE = re.compile(r"(?<!\d)(\d+)\s+error\(s\)", re.IGNORECASE)
+
+
+def solver_error_counts(output):
+    """Return every numeric ``N error(s)`` summary emitted by OOFEM."""
+    return [int(match.group(1)) for match in _ERROR_SUMMARY_RE.finditer(output or "")]
+
+
+def solver_output_succeeded(returncode, output, require_summary=False):
+    """Evaluate completion without the unsafe ``0``-inside-``10`` substring test."""
+    counts = solver_error_counts(output)
+    return (
+        returncode == 0
+        and (bool(counts) or not require_summary)
+        and all(count == 0 for count in counts)
+    )
 
 
 @dataclass
@@ -20,7 +39,9 @@ class SolverRunResult:
     @property
     def succeeded(self):
         combined = "{}\n{}".format(self.stdout, self.stderr).lower()
-        return self.returncode == 0 and "error(s)" in combined and "0 error(s)" in combined
+        return solver_output_succeeded(
+            self.returncode, combined, require_summary=True
+        )
 
 
 def resolve_executable(configured_path=None):
@@ -42,6 +63,36 @@ def resolve_timeout(timeout=None):
         return max(1, min(86400, int(timeout)))
     except (TypeError, ValueError):
         return 300
+
+
+def probe_solver_version(executable=None, timeout=2.0):
+    """Return concise OOFEM version provenance, or None when unavailable."""
+    executable = resolve_executable(executable)
+    if executable is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [executable, "-v"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=max(0.1, min(10.0, float(timeout))),
+        )
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return None
+    lines = []
+    for raw_line in "{}\n{}".format(
+        completed.stdout or "", completed.stderr or ""
+    ).splitlines():
+        line = raw_line.strip()
+        if (
+            line.startswith("OOFEM version ")
+            or line.startswith("Git RepoURL:")
+            or line.startswith("Branch:")
+            or line.startswith("Hash:")
+        ):
+            lines.append(line)
+    return "; ".join(lines) if lines else None
 
 
 def run_solver(input_file, executable=None, timeout=None):

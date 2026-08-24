@@ -187,6 +187,7 @@ class EntityDialogTests(unittest.TestCase):
                 "oofem_type": "simplecs",
                 "material_id": "mat-1",
                 "assigned_group": "BEAMS",
+                "element_options": {"nlgeo": "inherit"},
                 "element_mapping_override": {"Edge": "Beam2d"},
                 "params": {
                     "area": 2.75,
@@ -204,6 +205,10 @@ class EntityDialogTests(unittest.TestCase):
                 "oofem_type": "simplecs",
                 "material_id": "mat-2",
                 "assigned_group": "SHELLS",
+                "element_options": {
+                    "nlgeo": "on",
+                    "vendor_element_option": 7,
+                },
                 "element_mapping_override": {"Legacy": "LegacyElement"},
                 "params": {
                     "area": 4.0,
@@ -217,6 +222,7 @@ class EntityDialogTests(unittest.TestCase):
         self.assertEqual(dialog.nameEdit.text(), "edited")
         self.assertEqual(dialog.materialCombo.currentData(), "mat-2")
         self.assertEqual(dialog.groupCombo.currentText(), "SHELLS")
+        self.assertEqual(dialog.nlgeoCombo.currentData(), "on")
         self.assertEqual(
             dialog.parameterTable.item(
                 self._parameter_row(dialog, "stations"), 1
@@ -240,6 +246,13 @@ class EntityDialogTests(unittest.TestCase):
         self.assertEqual(
             dialog.get_data()["element_mapping_override"],
             {"Legacy": "LegacyElement"},
+        )
+        dialog.nlgeoCombo.setCurrentIndex(
+            dialog.nlgeoCombo.findData("off")
+        )
+        self.assertEqual(
+            dialog.get_data()["element_options"],
+            {"nlgeo": "off", "vendor_element_option": 7},
         )
 
     def test_cross_section_rejects_empty_name_missing_references_and_bad_value(self):
@@ -280,7 +293,23 @@ class EntityDialogTests(unittest.TestCase):
         self._set_parameter(bad_value, "order", "1.5")
         bad_value.accept()
         self.assertNotEqual(bad_value.result(), QtWidgets.QDialog.Accepted)
-        self.assertEqual(self.warning.call_count, 5)
+
+        invalid_nlgeo = self._cross_section(
+            existing={
+                "name": "invalid nlgeo",
+                "oofem_type": "simplecs",
+                "material_id": "mat-1",
+                "assigned_group": "BEAMS",
+                "element_options": {"nlgeo": "sometimes"},
+                "params": {},
+            }
+        )
+        self.assertTrue(invalid_nlgeo.nlgeoCombo.currentText().startswith("[invalid]"))
+        invalid_nlgeo.accept()
+        self.assertNotEqual(
+            invalid_nlgeo.result(), QtWidgets.QDialog.Accepted
+        )
+        self.assertEqual(self.warning.call_count, 6)
 
     def test_time_function_switches_templates_uses_defaults_and_supports_edit(self):
         dialog = self._track(
