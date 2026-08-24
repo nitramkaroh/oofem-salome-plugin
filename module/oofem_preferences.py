@@ -94,7 +94,7 @@ def create_preferences(api=None, preference_types=None):
     api.setPreferenceProperty(timeout, "suffix", " s")
 
     api.addPreference(
-        "Open results in ParaVis after a successful solve",
+        "Open results in integrated ParaView after a successful solve",
         group,
         preference_types.PT_Bool,
         RESOURCE_SECTION,

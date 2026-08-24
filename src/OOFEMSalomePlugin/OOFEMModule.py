@@ -202,6 +202,31 @@ class OOFEMModule:
             main_window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self.debug_console)
             self.debug_console.hide()
 
+    def _connect_widget_state(self):
+        """Connect the live editor to this module instance exactly once."""
+        if self.dock is None:
+            return
+        widget = self.dock.mainWidget
+        signal = getattr(widget, "projectChanged", None)
+        if signal is None:
+            return
+        if getattr(widget, "_oofem_state_sync_owner", None) is self:
+            return
+        signal.connect(self.sync_widget_state)
+        widget._oofem_state_sync_owner = self
+
+    def sync_widget_state(self, widget, mark_modified=True):
+        """Store a live widget state in its owning per-study session."""
+        state = getattr(widget, "state", None)
+        study = getattr(widget, "study", None)
+        if study is None or not isinstance(state, dict):
+            return False
+        session = self._ensure_session(study)
+        session.state = state
+        if mark_modified and session.key == self._active_study_key:
+            self._mark_study_modified()
+        return True
+
     def activate(self, context=None):
         """Open the module for the study supplied by SALOME."""
         self.context = context or self.context
@@ -223,6 +248,7 @@ class OOFEMModule:
                 _logger.error("Could not find the SALOME desktop window")
                 return None
             self._ensure_widgets(main_window)
+            self._connect_widget_state()
             self.dock.show()
             self.dock.raise_()
             self.dock.mainWidget.populateAll(study=study, state=session.state)
@@ -240,15 +266,31 @@ class OOFEMModule:
             return None
 
     def snapshot_state(self):
-        """Collect the current JSON-serializable project state."""
+        """Collect the active widget state immediately before SALOME saves."""
         if self.dock is not None:
             widget = self.dock.mainWidget
-            try:
-                widget.collectElementMapping()
-                widget._solverSettingsChanged()
-            except Exception:
-                _logger.warning("Could not collect all OOFEM widget settings", exc_info=True)
-            self._snapshot_widget_session()
+            widget_study = getattr(widget, "study", None)
+            session = self._active_session()
+            widget_matches = (
+                widget_study is not None
+                and _study_key(widget_study) == session.key
+            )
+            if widget_matches:
+                try:
+                    try:
+                        widget.collectElementMapping(notify=False)
+                    except TypeError:
+                        widget.collectElementMapping()
+                    try:
+                        widget._solverSettingsChanged(notify=False)
+                    except TypeError:
+                        widget._solverSettingsChanged()
+                except Exception:
+                    _logger.warning(
+                        "Could not collect all OOFEM widget settings",
+                        exc_info=True,
+                    )
+                self._snapshot_widget_session()
         return self.study_state
 
     def _mark_study_modified(self):

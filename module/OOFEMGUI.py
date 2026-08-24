@@ -69,11 +69,12 @@ def preferenceChanged(section, name):
 
 
 def saveFiles(directory, url=""):
-    """Save OOFEM project data for inclusion in the SALOME HDF study."""
+    """Flush the live editor and save it into the SALOME HDF study."""
     from OOFEMSalomePlugin.OOFEMModule import getModule
 
     try:
-        return getModule().save(directory, url)
+        module = getModule()
+        return module.save(directory, url)
     except Exception:
         import traceback
 

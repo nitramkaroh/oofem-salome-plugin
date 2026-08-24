@@ -15,7 +15,12 @@ from OOFEMSalomePlugin.OOFEMProject import (
 )
 
 
+_Signal = getattr(QtCore, "pyqtSignal", None) or QtCore.Signal
+
+
 class OOFEMMainWidget(QtWidgets.QWidget):
+    projectChanged = _Signal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -31,6 +36,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.cross_section_templates = []
         self.time_function_templates = []
         self._block_signals = False
+        self._project_change_suspended = False
         self.solverProcess = None
         self._solver_output_buffer = ""
         self._solver_cancelled = False
@@ -124,6 +130,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.elemTable = QtWidgets.QTableWidget()
         self.elemTable.setColumnCount(2)
         self.elemTable.setHorizontalHeaderLabels(["Salome Type", "OOFEM Type"])
+        self.elemTable.cellChanged.connect(self.onElementMappingChanged)
         elem_layout.addWidget(self.elemTable)
         self.tabs.addTab(elem_tab, "Element Mapping")
 
@@ -424,7 +431,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.refreshResultsBtn = QtWidgets.QPushButton("Refresh Results")
         self.refreshResultsBtn.clicked.connect(self.refreshResults)
         post_buttons.addWidget(self.refreshResultsBtn)
-        self.openParaVisBtn = QtWidgets.QPushButton("Open in ParaVis")
+        self.openParaVisBtn = QtWidgets.QPushButton("Open in ParaView")
         self.openParaVisBtn.clicked.connect(self.openSelectedResult)
         post_buttons.addWidget(self.openParaVisBtn)
         self.convertMedBtn = QtWidgets.QPushButton("Convert VTK to MED…")
@@ -439,11 +446,16 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         post_layout.addWidget(post_note)
         self.tabs.addTab(post_tab, "Postprocess")
 
-        # --- Bottom buttons ---
+        # State is owned by the active SALOME study. SALOME's normal Save
+        # action serializes the latest widget values; no separate commit step
+        # is required.
         bottom_layout = QtWidgets.QHBoxLayout()
-        self.saveBtn = QtWidgets.QPushButton("💾 Commit OOFEM Settings")
-        self.saveBtn.clicked.connect(self.saveState)
-        bottom_layout.addWidget(self.saveBtn)
+        self.persistenceLabel = QtWidgets.QLabel(
+            "Changes are applied to the active study automatically. "
+            "Use File > Save to store them in the SALOME study."
+        )
+        self.persistenceLabel.setWordWrap(True)
+        bottom_layout.addWidget(self.persistenceLabel)
 
         layout.addLayout(bottom_layout)
 
@@ -534,7 +546,28 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
         getModule().showDebugConsole()
 
+    def _notifyProjectChanged(self):
+        """Synchronize a confirmed edit with the active SALOME study."""
+        if (
+            self._project_change_suspended
+            or self._block_signals
+            or self.study is None
+            or not isinstance(self.state, dict)
+        ):
+            return False
+        self.projectChanged.emit(self)
+        return True
+
     def populateAll(self, checked=False, study=None, state=None):
+        """Load controls without reporting the load itself as a user edit."""
+        previous = self._project_change_suspended
+        self._project_change_suspended = True
+        try:
+            return self._populateAll(checked=checked, study=study, state=state)
+        finally:
+            self._project_change_suspended = previous
+
+    def _populateAll(self, checked=False, study=None, state=None):
         """Load the active study and rebuild all controls."""
         if self.solverProcess is not None and (
             self.solverProcess.state() != QtCore.QProcess.NotRunning
@@ -659,6 +692,15 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             smesh_comp = self.study.FindComponent("SMESH")
             if smesh_comp is not None:
                 child_iterator = self.study.NewChildIterator(smesh_comp)
+                try:
+                    # SALOMEDS defaults to direct children. Meshes can live in
+                    # user-created study folders, so request the complete
+                    # component subtree when the iterator supports it.
+                    child_iterator.InitEx(True)
+                except AttributeError:
+                    # Lightweight test doubles and very old SALOME clients may
+                    # only expose the direct-child iterator API.
+                    pass
                 while child_iterator.More():
                     s_object = child_iterator.Value()
                     mesh_object = s_object.GetObject()
@@ -683,8 +725,13 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.onMeshChanged(self.meshCombo.currentIndex())
 
     def onMeshChanged(self, index):
-        if index >= 0 and self.state is not None:
-            self.state["selected_mesh_id"] = self.meshCombo.itemData(index)
+        if index < 0 or not isinstance(self.state, dict):
+            return
+        mesh_id = self.meshCombo.itemData(index)
+        if self.state.get("selected_mesh_id") == mesh_id:
+            return
+        self.state["selected_mesh_id"] = mesh_id
+        self._notifyProjectChanged()
 
     def _meshFromEntry(self, mesh_id):
         if self.study is not None:
@@ -863,6 +910,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             },
         }
         self.populateAnalysisDetails()
+        self._notifyProjectChanged()
 
     def onAnalysisPropertyChanged(self, row, column):
         if self._block_signals or column != 1:
@@ -879,14 +927,20 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             "params", {}
         )
         if optional and not text:
-            parameters.pop(key, None)
+            if key in parameters:
+                del parameters[key]
+                self._notifyProjectChanged()
             return
         try:
-            parameters[key] = self._coerceParameterValue(text, parameter_type)
+            value = self._coerceParameterValue(text, parameter_type)
         except (TypeError, ValueError) as error:
             self.statusLabel.setText(
                 "Invalid analysis parameter '{}': {}".format(key, error)
             )
+            return
+        if parameters.get(key) != value:
+            parameters[key] = value
+            self._notifyProjectChanged()
 
     def populateTimeFunctions(self):
         self.timeFunctionTable.setRowCount(0)
@@ -926,6 +980,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             data["id"] = str(uuid.uuid4())
             self.state["time_functions"].append(data)
             self.populateTimeFunctions()
+            self._notifyProjectChanged()
 
     def editTimeFunction(self, *unused):
         existing = self._selectedTimeFunction()
@@ -943,6 +998,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             existing.update(data)
             self.populateTimeFunctions()
             self.populateBCs()
+            self._notifyProjectChanged()
 
     def removeTimeFunction(self):
         existing = self._selectedTimeFunction()
@@ -984,19 +1040,31 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if function.get("id") != function_id
         ]
         self.populateTimeFunctions()
+        self._notifyProjectChanged()
 
     # Element mapping table
     # ---------------------------
     def populateElementMapping(self):
         mapping = self.state.get("element_mapping", {})
-        self.elemTable.setRowCount(0)
+        self.elemTable.blockSignals(True)
+        try:
+            self.elemTable.setRowCount(0)
+            for salome_type, oofem_type in mapping.items():
+                row = self.elemTable.rowCount()
+                self.elemTable.insertRow(row)
+                self.elemTable.setItem(
+                    row, 0, QtWidgets.QTableWidgetItem(salome_type)
+                )
+                self.elemTable.setItem(
+                    row, 1, QtWidgets.QTableWidgetItem(oofem_type)
+                )
+        finally:
+            self.elemTable.blockSignals(False)
 
-        for salome_type, oofem_type in mapping.items():
-            row = self.elemTable.rowCount()
-            self.elemTable.insertRow(row)
-            self.elemTable.setItem(row, 0, QtWidgets.QTableWidgetItem(salome_type))
-            self.elemTable.setItem(row, 1, QtWidgets.QTableWidgetItem(oofem_type))
-            
+    def onElementMappingChanged(self, row, column):
+        del row, column
+        self.collectElementMapping()
+
     # ---------------------------
     # Cross sections and material/group assignments
     def populateCrossSections(self):
@@ -1104,6 +1172,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             data["id"] = str(uuid.uuid4())
             self.state["cross_sections"].append(data)
             self.populateCrossSections()
+            self._notifyProjectChanged()
 
     def editCrossSection(self, *unused):
         existing = self._selectedCrossSection()
@@ -1122,6 +1191,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             existing.clear()
             existing.update(merged)
             self.populateCrossSections()
+            self._notifyProjectChanged()
 
     def removeCrossSection(self):
         existing = self._selectedCrossSection()
@@ -1137,6 +1207,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if cross_section.get("id") != cross_section_id
         ]
         self.populateCrossSections()
+        self._notifyProjectChanged()
 
     @staticmethod
     def _crossSectionFromLegacyMaterial(material):
@@ -1260,6 +1331,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                     self.state["cross_sections"].append(section)
                     self.populateCrossSections()
             self.populateMaterials()
+            self._notifyProjectChanged()
 
     def removeMaterial(self):
         """Removes the selected material from the state."""
@@ -1285,6 +1357,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             return
         self.state['materials'] = [m for m in self.state['materials'] if m.get('id') != mat_id]
         self.populateMaterials()
+        self._notifyProjectChanged()
 
     # ---------------------------
     # Boundary Conditions
@@ -1415,6 +1488,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             new_bc_data["id"] = str(uuid.uuid4())
             self.state["bcs"].append(new_bc_data)
             self.populateBCs()
+            self._notifyProjectChanged()
 
     def editBC(self):
         existing = self._selectedBC()
@@ -1435,6 +1509,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             existing.clear()
             existing.update(data)
             self.populateBCs()
+            self._notifyProjectChanged()
 
     def removeBC(self):
         """Removes the selected BC from the state."""
@@ -1446,6 +1521,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         bc_id = selected_items[0].data(Qt.UserRole)
         self.state['bcs'] = [m for m in self.state['bcs'] if m.get('id') != bc_id]
         self.populateBCs()
+        self._notifyProjectChanged()
 
     # ---------------------------
     # Initial conditions
@@ -1514,6 +1590,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             data["id"] = "ic-{}".format(uuid.uuid4())
             self.state.setdefault("initial_conditions", []).append(data)
             self.populateInitialConditions()
+            self._notifyProjectChanged()
 
     def editInitialCondition(self, *unused):
         del unused
@@ -1538,6 +1615,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             existing.clear()
             existing.update(data)
             self.populateInitialConditions()
+            self._notifyProjectChanged()
 
     def removeInitialCondition(self):
         existing = self._selectedInitialCondition()
@@ -1555,6 +1633,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if item.get("id") != entity_id
         ]
         self.populateInitialConditions()
+        self._notifyProjectChanged()
 
     # ---------------------------
     # Structural contact pairs
@@ -1661,6 +1740,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state.setdefault("contacts", []).append(data)
             self._ensureContactSolverSetup(reset_steps=True)
             self.populateContacts()
+            self._notifyProjectChanged()
 
     def editContact(self, *unused):
         del unused
@@ -1682,6 +1762,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             existing.update(data)
             self._ensureContactSolverSetup()
             self.populateContacts()
+            self._notifyProjectChanged()
 
     def removeContact(self, *unused):
         del unused
@@ -1699,6 +1780,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         ]
         self._ensureContactSolverSetup()
         self.populateContacts()
+        self._notifyProjectChanged()
 
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
@@ -1722,6 +1804,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if is_optional and not value_text:
             if param_key in bc_data['params']:
                 del bc_data['params'][param_key]
+                self._notifyProjectChanged()
             return
 
         try:
@@ -1741,7 +1824,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             and "val" in bc_data["params"]
         ):
             bc_data["params"]["val"] = new_value[0]
-
+        self._notifyProjectChanged()
 
     def onMaterialPropertyChanged(self, row, column):
         """Updates the state when a material property value is changed."""
@@ -1770,6 +1853,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if is_optional and not value_text:
             if param_key in mat_data['params']:
                 del mat_data['params'][param_key]
+                self._notifyProjectChanged()
                 print(f"INFO: Optional parameter '{param_key}' was removed.")
             return
 
@@ -1789,11 +1873,12 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
             return
         mat_data['params'][param_key] = new_value
+        self._notifyProjectChanged()
 
     # ---------------------------
     # State Management
     # ---------------------------
-    def collectElementMapping(self):
+    def collectElementMapping(self, notify=True):
         new_map = {}
         for row in range(self.elemTable.rowCount()):
             salome_item = self.elemTable.item(row, 0)
@@ -1804,15 +1889,20 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             oofem_type = oofem_item.text().strip()
             if salome_type:
                 new_map[salome_type] = oofem_type
-        self.state["element_mapping"] = new_map
+        changed = self.state.get("element_mapping") != new_map
+        if changed:
+            self.state["element_mapping"] = new_map
+            if notify:
+                self._notifyProjectChanged()
+        return changed
 
     def saveState(self):
         if self.study is None:
             QtWidgets.QMessageBox.warning(self, "Error", "Plugin not initialized. Click Refresh first.")
             return
 
-        self.collectElementMapping()
-        self._solverSettingsChanged()
+        self.collectElementMapping(notify=False)
+        self._solverSettingsChanged(notify=False)
 
         from OOFEMSalomePlugin.OOFEMModule import getModule
 
@@ -1831,12 +1921,19 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     # ---------------------------
     # Export / solve
     # ---------------------------
-    def _solverSettingsChanged(self, *unused):
+    def _solverSettingsChanged(self, *unused, **options):
         if not isinstance(self.state, dict):
-            return
-        self.state["solver_preset"] = self.solverPresetCombo.currentData()
-        self.state["oofem_executable"] = self.oofemExecutableEdit.text().strip()
-        self.state["last_input_file"] = self.inputFileEdit.text().strip()
+            return False
+        values = {
+            "solver_preset": self.solverPresetCombo.currentData(),
+            "oofem_executable": self.oofemExecutableEdit.text().strip(),
+            "last_input_file": self.inputFileEdit.text().strip(),
+        }
+        changed = any(self.state.get(key) != value for key, value in values.items())
+        self.state.update(values)
+        if changed and options.get("notify", True):
+            self._notifyProjectChanged()
+        return changed
 
     def _selectedSolverSettings(self, output_directory=None):
         from OOFEMSalomePlugin.OOFEMConfig import solver_settings
@@ -2036,13 +2133,23 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             and os.path.isfile(os.path.join(run_directory, "run.json"))
         )
 
-    def _clearRunSelection(self):
+    def _setLastRunId(self, run_id, notify=True):
+        if not isinstance(self.state, dict):
+            return False
+        run_id = str(run_id or "")
+        if self.state.get("last_run_id") == run_id:
+            return False
+        self.state["last_run_id"] = run_id
+        if notify:
+            self._notifyProjectChanged()
+        return True
+
+    def _clearRunSelection(self, notify=True):
         self.runHistoryCombo.blockSignals(True)
         self.runHistoryCombo.setCurrentIndex(-1)
         self.runHistoryCombo.blockSignals(False)
-        if isinstance(self.state, dict):
-            self.state["last_run_id"] = ""
-        self.onRunHistoryChanged(-1)
+        self._setLastRunId("", notify=notify)
+        self.onRunHistoryChanged(-1, notify=False)
 
     def _exportModel(
         self, filename=None, solver_settings=None, recorded_run=False
@@ -2259,10 +2366,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         enabled = self.runHistoryCombo.count() > 0
         self.rerunBtn.setEnabled(enabled)
         self.deleteRunBtn.setEnabled(enabled)
-        self.onRunHistoryChanged(selected_index)
+        self.onRunHistoryChanged(selected_index, notify=False)
         return manifests
 
-    def onRunHistoryChanged(self, index):
+    def onRunHistoryChanged(self, index, notify=True):
         if index < 0:
             self.rerunBtn.setEnabled(False)
             self.markInterruptedBtn.setEnabled(False)
@@ -2282,7 +2389,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             manifest.get("status") in ("pending", "running")
             and not self._runIsActiveInCurrentProcess(run_id)
         )
-        self.state["last_run_id"] = run_id
+        self._setLastRunId(run_id, notify=notify)
         from OOFEMSalomePlugin.OOFEMResults import summarize_run
 
         summary = summarize_run(run_directory, manifest)
@@ -2444,6 +2551,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.state["last_run_id"] = ""
         self.refreshRunHistory()
         self.refreshResults()
+        self._notifyProjectChanged()
         return True
 
     def runSolver(self, source_run_id=None):
@@ -2524,6 +2632,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self._active_run_manager = manager
             self._run_terminal_recorded = False
             self.state["last_run_id"] = handle.run_id
+            self._notifyProjectChanged()
             self.solverLog.clear()
             self._solver_output_buffer = ""
             self._solver_cancelled = False
@@ -2931,7 +3040,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
             open_in_paravis(path, getModule().context)
             self.statusLabel.setText(
-                "Opened {} in ParaVis.".format(os.path.basename(path))
+                "Opened {} in ParaView.".format(os.path.basename(path))
             )
         except Exception as error:
             QtWidgets.QMessageBox.critical(self, "OOFEM Postprocess", str(error))

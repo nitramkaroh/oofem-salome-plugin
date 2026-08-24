@@ -37,8 +37,21 @@ class ObjectOnlyStudy:
     pass
 
 
+class FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def emit(self, *args):
+        for slot in list(self.slots):
+            slot(*args)
+
+
 class FakeMainWidget:
     def __init__(self):
+        self.projectChanged = FakeSignal()
         self.study = None
         self.state = {}
         self.populate_calls = []
@@ -228,6 +241,61 @@ class StudySessionTests(unittest.TestCase):
         self.assertEqual(self.module.study_url, "active-b.hdf")
         self.activate(FakeStudy(51))
         self.assertIs(self.module.study_state, state_a)
+
+    def test_live_widget_sync_marks_only_its_active_study_modified(self):
+        study_a = FakeStudy(71)
+        study_b = FakeStudy(72)
+        self.activate(study_a)
+        modified = []
+        self.module.context.sg = types.SimpleNamespace(
+            setModified=lambda value: modified.append(value)
+        )
+
+        state_a = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "live A"}
+        self.module.dock.mainWidget.state = state_a
+        self.module.dock.mainWidget.projectChanged.emit(
+            self.module.dock.mainWidget
+        )
+        self.assertIs(self.module.study_state, state_a)
+        self.assertEqual(modified, [True])
+
+        self.activate(study_b)
+        modified.clear()
+        stale_a = types.SimpleNamespace(
+            study=study_a,
+            state={"schema_version": PROJECT_SCHEMA_VERSION, "name": "new A"},
+        )
+        self.assertTrue(self.module.sync_widget_state(stale_a))
+        self.assertEqual(modified, [])
+        self.activate(study_a)
+        self.assertEqual(self.module.study_state["name"], "new A")
+
+    def test_save_snapshots_current_widget_without_manual_commit(self):
+        study = FakeStudy(73)
+        self.activate(study)
+        self.module.set_study_state(
+            {"schema_version": PROJECT_SCHEMA_VERSION, "name": "old"},
+            refresh=True,
+        )
+        live = {"schema_version": PROJECT_SCHEMA_VERSION, "name": "live"}
+        self.module.dock.mainWidget.state = live
+        fake_salome = types.ModuleType("salome")
+        fake_salome.myStudy = study
+        saved = []
+
+        with unittest.mock.patch.dict(sys.modules, {"salome": fake_salome}), \
+             unittest.mock.patch.object(
+                 module_mod.OOFEMState,
+                 "save_file",
+                 side_effect=lambda filename, state: saved.append(state) or True,
+             ):
+            self.assertEqual(
+                self.module.save("/unused", "live.hdf"),
+                [module_mod.STATE_FILE_NAME],
+            )
+
+        self.assertEqual(saved, [live])
+        self.assertIs(self.module.study_state, live)
 
     def test_load_migrates_v2_and_legacy_but_preserves_v3_identity(self):
         self.activate(FakeStudy(303))

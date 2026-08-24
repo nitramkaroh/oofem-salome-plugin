@@ -142,9 +142,15 @@ class FakeStudyObject:
 
 
 class FakeIterator:
-    def __init__(self, items):
+    def __init__(self, items, recursive_items=None):
         self._items = items
+        self._recursive_items = recursive_items
         self._index = 0
+
+    def InitEx(self, all_levels):
+        if all_levels and self._recursive_items is not None:
+            self._items = self._recursive_items
+            self._index = 0
 
     def More(self):
         return self._index < len(self._items)
@@ -157,19 +163,22 @@ class FakeIterator:
 
 
 class FakeStudy:
-    def __init__(self, mesh_objects):
+    def __init__(self, mesh_objects, recursive_objects=None):
         self._smesh_component = object()
         self._mesh_objects = list(mesh_objects)
+        self._recursive_objects = list(
+            recursive_objects if recursive_objects is not None else mesh_objects
+        )
 
     def FindComponent(self, name):
         return self._smesh_component if name == "SMESH" else None
 
     def NewChildIterator(self, component):
-        return FakeIterator(self._mesh_objects)
+        return FakeIterator(self._mesh_objects, self._recursive_objects)
 
     def FindObjectID(self, object_id):
         return next(
-            (o for o in self._mesh_objects if o.GetID() == object_id), None
+            (o for o in self._recursive_objects if o.GetID() == object_id), None
         )
 
 
@@ -204,6 +213,18 @@ class MainWidgetWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.widget.state["element_mapping"].get("Quadrangle"), "PlaneStress2d"
         )
+
+    def test_populate_all_discovers_mesh_inside_study_folder(self):
+        folder = FakeStudyObject("0:1:10", "Meshes", None)
+        nested_mesh = FakeMesh()
+        nested = FakeStudyObject("0:1:10:1", "Nested panel", nested_mesh)
+        study = FakeStudy([folder], recursive_objects=[folder, nested])
+
+        self.widget.populateAll(study=study)
+
+        self.assertEqual(self.widget.meshCombo.count(), 1)
+        self.assertEqual(self.widget.meshCombo.currentText(), "Nested panel")
+        self.assertEqual(self.widget.meshCombo.currentData(), "0:1:10:1")
 
     def _add_sheet_material(self):
         self.widget.state["materials"].append(
@@ -287,6 +308,47 @@ class MainWidgetWorkflowTests(unittest.TestCase):
         summary = self.widget.validateModel()
         self.assertIsNone(summary)
         self.assertIn("Validation failed", self.widget.exportSummaryLabel.text())
+
+    def test_confirmed_edits_emit_project_changed_but_refresh_does_not(self):
+        self._add_sheet_material()
+        events = []
+        self.widget.projectChanged.connect(events.append)
+
+        self.widget.populateAll(study=self.study, state=self.widget.state)
+        self.assertEqual(events, [])
+        self.assertFalse(hasattr(self.widget, "saveBtn"))
+        self.assertIn("File > Save", self.widget.persistenceLabel.text())
+
+        self.widget.matTable.selectRow(0)
+        value_item = self.widget.matPropsTable.item(0, 1)
+        value_item.setText("invalid")
+        self.assertEqual(events, [])
+        value_item.setText("2200")
+        self.assertEqual(events, [self.widget])
+
+        events.clear()
+        mapping_item = self.widget.elemTable.item(0, 1)
+        mapping_item.setText("CustomElement")
+        self.assertEqual(events, [self.widget])
+        self.assertIn("CustomElement", self.widget.state["element_mapping"].values())
+
+        events.clear()
+        self.widget.state["last_run_id"] = "run-1"
+        self.widget._clearRunSelection()
+        self.assertEqual(events, [self.widget])
+        events.clear()
+        self.widget._clearRunSelection()
+        self.assertEqual(events, [])
+
+    def test_cancelled_dialog_does_not_emit_project_changed(self):
+        events = []
+        self.widget.projectChanged.connect(events.append)
+        with unittest.mock.patch(
+            "OOFEMSalomePlugin.OOFEMMainWidget.OOFEMMaterialDialog.run",
+            return_value=None,
+        ):
+            self.widget.addMaterial()
+        self.assertEqual(events, [])
 
     def test_save_state_commits_state_into_module_singleton(self):
         self._add_sheet_material()

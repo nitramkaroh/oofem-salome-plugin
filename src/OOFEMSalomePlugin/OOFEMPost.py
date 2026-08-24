@@ -1,4 +1,4 @@
-"""OOFEM result discovery, ParaVis loading, and optional MED conversion."""
+"""OOFEM result discovery, integrated ParaView, and optional MED conversion."""
 
 import glob
 import os
@@ -56,7 +56,9 @@ def open_in_paravis(path, salome_context=None):
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
     if os.path.splitext(path)[1].lower() not in (".pvd", ".vtu", ".vtk", ".med"):
-        raise ValueError("ParaVis cannot open OOFEM text output; select a VTK/PVD/MED file.")
+        raise ValueError(
+            "ParaView cannot open OOFEM text output; select a VTK/PVD/MED file."
+        )
 
     try:
         if salome_context is not None:
@@ -72,12 +74,13 @@ def open_in_paravis(path, salome_context=None):
         import pvsimple as pvs
     except ImportError as error:
         raise RuntimeError(
-            "ParaVis Python API is unavailable. Activate/install the SALOME ParaVis module."
+            "The integrated ParaView API is unavailable. Activate/install "
+            "SALOME's ParaVis module."
         ) from error
 
     source = pvs.OpenDataFile(path)
     if source is None:
-        raise RuntimeError("ParaVis did not create a reader for {}".format(path))
+        raise RuntimeError("ParaView did not create a reader for {}".format(path))
     pvs.Show(source)
     try:
         pvs.ResetCamera()

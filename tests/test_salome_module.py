@@ -405,6 +405,57 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 original_resource,
             )
 
+    def test_installs_from_unpacked_native_layout_without_install_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            salome_dir = root / "SALOME-9.16.0-native-UB24.04-SRC"
+            salome_dir.mkdir()
+            salome_launcher = salome_dir / "salome"
+            salome_launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            salome_launcher.chmod(0o755)
+            version_file = (
+                salome_dir
+                / "BINARIES-UB24.04"
+                / "GUI"
+                / "bin"
+                / "salome"
+                / "VERSION"
+            )
+            version_file.parent.mkdir(parents=True)
+            version_file.write_text("[SALOME GUI]  : 9.16.0\n", encoding="utf-8")
+            self.assertFalse((salome_dir / "INSTALL").exists())
+
+            environment = os.environ.copy()
+            environment["XDG_CONFIG_HOME"] = str(root / "config")
+            result = subprocess.run(
+                ["bash", str(MODULE_INSTALLER), "--salome", str(salome_dir)],
+                cwd=str(REPOSITORY_ROOT),
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            user_config = (
+                pathlib.Path(environment["XDG_CONFIG_HOME"])
+                / "salome"
+                / "SalomeApprc.9.16.0"
+            )
+            self.assertIn("OOFEM SALOME module installed", result.stdout)
+            self.assertTrue(user_config.is_file())
+            self.assertIn(
+                str(
+                    salome_dir
+                    / "INSTALL"
+                    / "OOFEM"
+                    / "share"
+                    / "salome"
+                    / "resources"
+                    / "oofem"
+                ),
+                user_config.read_text(encoding="utf-8"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

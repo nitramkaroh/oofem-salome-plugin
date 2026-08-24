@@ -2,7 +2,8 @@
 
 This plugin adds a dockable OOFEM workflow to the SALOME desktop. It turns
 SMESH groups into a validated OOFEM model, runs OOFEM without freezing the
-SALOME GUI, and opens native OOFEM VTK results in ParaVis.
+SALOME GUI, and opens native OOFEM VTK results in SALOME's integrated ParaView
+(the module is technically named ParaVis).
 
 ## Features
 
@@ -32,8 +33,8 @@ SALOME GUI, and opens native OOFEM VTK results in ParaVis.
   solver version/git provenance, logs, terminal states, rerun, and explicit
   cleanup
 - Native .pvd/.vtu discovery with time-step and field summaries, optional
-  automatic ParaVis loading, and optional .vtu/.vtk to MED conversion through
-  meshio
+  automatic integrated ParaView loading, and optional .vtu/.vtk to MED
+  conversion through meshio
 - Typed SALOME preferences for executable, working/results directories,
   timeout, and automatic postprocessing
 - Editable material templates plus named steel, aluminium, and concrete presets
@@ -141,9 +142,9 @@ selection, and the alternative `QuadLinGauss` carrier are not exported yet.
 ## Install as a SALOME module (recommended)
 
 This is the AsterStudy-style integration. OOFEM appears in SALOME's module
-selector alongside Geometry, Mesh, and ParaVis. Its activation callback loads
-the SMESH engine automatically, so the Mesh module does not need to be opened
-first.
+selector alongside Geometry, Mesh, and ParaView (the SALOME module is
+technically named ParaVis). Its activation callback loads the SMESH engine
+automatically, so the Mesh module does not need to be opened first.
 
 ~~~bash
 ./install-salome-module.sh \
@@ -161,8 +162,9 @@ Select **OOFEM** from the module selector. The installer uses SALOME's
 the standard `initialize()`, `activate()`, `deactivate()`, `windows()`,
 `views()`, `saveFiles()`, `openFiles()`, and `closeStudy()` lifecycle
 callbacks. OOFEM settings are serialized to a versioned JSON document that SALOME
-embeds in the HDF study. Click **Commit OOFEM Settings**, then use **File > Save**
-to persist them.
+embeds in the HDF study. Every confirmed editor change updates the active study
+and marks it modified automatically; use **File > Save** or **Ctrl+S** to
+persist it. No plugin-specific commit step is required.
 
 The default installer keeps the SALOME installation immutable. It installs the
 module in an isolated OOFEM prefix, registers resources in the per-user
@@ -183,7 +185,7 @@ cmake --build build --target install
 ~~~
 
 Open **File > Preferences > OOFEM** to configure the solver executable,
-working and result directories, timeout, and automatic ParaVis loading.
+working and result directories, timeout, and automatic ParaView loading.
 
 The packaged wordmark is the official
 [OOFEM logo](https://www.oofem.org/wiki/lib/exe/fetch.php?cache=&media=oofem-logo.png).
@@ -271,10 +273,11 @@ export SALOME_PLUGINS_PATH="$PWD${SALOME_PLUGINS_PATH:+:$SALOME_PLUGINS_PATH}"
    OOFEM**. Choose an input path in **Export / Solve** if desired.
 10. Click **Validate**, then **Generate & Run**. Each solve receives a new
    timestamped run directory and can be cancelled without freezing SALOME.
-11. Click **Commit OOFEM Settings**, then save the SALOME study. Each open study
-   retains an independent OOFEM project state.
+11. Save the SALOME study with **File > Save** or **Ctrl+S**. Each open study
+    retains an independent OOFEM project state; no plugin-specific commit is
+    needed.
 12. In **Postprocess**, select any recorded run, inspect its status, time steps,
-    and fields, then open the .pvd in ParaVis. **Rerun as New** preserves the
+    and fields, then open the .pvd in ParaView. **Rerun as New** preserves the
     source run; deletion always requires confirmation. If SALOME was closed
     during a solve, use **Mark Interrupted** after confirming that the external
     OOFEM process has ended; partial results are retained and made read-only.
@@ -295,14 +298,14 @@ python3 -m compileall -q salome_plugins.py src tests
 
 Without an available solver, solver integration cases are reported
 as skipped. Installer isolation, plugin registration, study persistence,
-validation, result discovery, ParaVis dispatch, and MED conversion dispatch
+validation, result discovery, ParaView dispatch, and MED conversion dispatch
 still run.
 
 The MainWidget and dialog suites drive the actual Qt controls under
 `QT_QPA_PLATFORM=offscreen` (mesh/group discovery, entity editing, validation,
-and study-state commit). They need a real PyQt5 or PySide2 install and report
-themselves skipped without one. SALOME services and SMESH are faked in the
-headless suite.
+and live study-state synchronization). They need a real PyQt5 or PySide2
+install and report themselves skipped without one. SALOME services and SMESH
+are faked in the headless suite.
 
 ### 2. Real OOFEM regression tests
 
@@ -344,7 +347,28 @@ OOFEM_BIN=/absolute/path/to/oofem \
   python3 -m unittest tests.test_contact_exporter -v
 ~~~
 
-### 3. SALOME end-to-end smoke test
+### 3. Automated real-SALOME acceptance
+
+After installing the module, run the isolated terminal acceptance test against
+the target SALOME and OOFEM binaries:
+
+~~~bash
+OOFEM_SALOME_ROOT=/absolute/path/to/SALOME-9.16.0-native-UB24.04-SRC \
+OOFEM_BIN=/absolute/path/to/oofem \
+  python3 -m unittest \
+  tests.test_salome_acceptance.RealSalomeAcceptanceTests -v
+~~~
+
+This starts the generated `salome-oofem` launcher with a temporary user
+configuration and checks native module discovery and callback-payload
+roundtrip, a separate SALOMEDS AttributeString HDF save/reopen, a real SMESH
+contact model, contact export with element `nlgeo` disabled, execution by the
+selected OOFEM binary, real PVD output, and loading that output through
+SALOME's integrated ParaView `PVDReader`. GUI module/dock activation and
+SALOME's automatic embedding of the callback payload remain part of the
+manual smoke test below.
+
+### 4. Manual SALOME GUI smoke test
 
 Start SALOME with the installed plugin. In SALOME's Python console, run the
 example using its absolute path:
@@ -370,7 +394,10 @@ Then:
    1 cross section, and 3 boundary conditions.
 9. Click **Generate & Run**. The process must finish with exit code zero and
    OOFEM's `0 error(s)` summary.
-10. Open the **Postprocess** tab and load the .pvd in ParaVis.
+10. Use **File > Save As**, close the study, reopen its HDF file, and select
+    OOFEM again. The mesh selection, model definitions, and run history must
+    be restored without a plugin-specific commit action.
+11. Open the **Postprocess** tab and load the .pvd in ParaView.
 
 The resulting text output should give node 2, DOF 1 displacement 0.025.
 
@@ -413,7 +440,7 @@ pair selects and locks the current-OOFEM contact preset automatically; no
 solver implementation/profile choice is exposed. For a small-strain elastic
 contact model, leave **Element nlgeo** disabled or inherited.
 
-### 4. MED conversion
+### 5. MED conversion
 
 OOFEM writes VTK directly. MED conversion is optional and requires meshio in
 the Python environment used by SALOME. After installing it there, select a
@@ -421,10 +448,11 @@ the Python environment used by SALOME. After installing it there, select a
 
 ## Result integration
 
-The plugin activates ParaVis and uses SALOME's pvsimple API to open
+The plugin activates SALOME's ParaVis module, which embeds ParaView, and uses
+its `pvsimple` API to open
 .pvd, .vtu, .vtk, or .med data. A .pvd file is preferred because it retains
 the complete time series. OOFEM's text .out remains available in the result
-list for inspection but is not sent to ParaVis.
+list for inspection but is not sent to ParaView.
 
 Each **Generate & Run** operation creates:
 
@@ -451,7 +479,7 @@ The basic local structural workflow is integrated end to end: select a SMESH
 mesh, define an analysis, materials, cross sections, time functions and
 multi-component conditions, validate references, generate atomically, run or
 cancel OOFEM, persist the project per study, and inspect native VTK output in
-ParaVis.
+ParaView.
 
 Run history/provenance, multiple retained runs, PVD time-step/field summaries,
 dead weight, uniform temperature loads, and constant structural initial
@@ -475,8 +503,9 @@ implemented with automatic solver setup. The next priorities are:
    optional remote/HPC runner, and automatic detection of externally finished
    jobs after SALOME restarts. Manual stale-run recovery is already available
    through **Mark Interrupted**.
-6. **Release engineering** — one generated version source for CMake/Python/XML,
-   hosted unit/install CI plus a serial self-hosted SALOME smoke test.
+6. **Release engineering** — one generated version source for CMake/Python/XML
+   and hosted unit/install CI. The serial real-SALOME terminal acceptance is
+   implemented; automated GUI activation and packaging remain.
 
 These priorities follow architectural patterns from
 [AsterStudy](https://gitlab.com/salomemeca/modules/salome-asterstudy) without
@@ -489,7 +518,7 @@ SALOME 9.15 or newer is the current target. Qt is selected through
 SalomePyQt, supporting the PyQt5 and PySide2 configurations used by SALOME 9.
 
 The repository-level salome_plugins.py keeps imports lazy so SALOME can
-discover the fallback menu action without loading SMESH, Qt widgets, or ParaVis
+discover the fallback menu action without loading SMESH, Qt widgets, or ParaView
 during startup. The native module never queries SALOMEDS for OOFEM state during
 activation; its save/open callbacks own project persistence, while SMESH lookup
 failures leave the dock open so Refresh can retry.

@@ -24,9 +24,27 @@ OOFEM_SETTINGS = {
 
 
 def _salome_version(salome_dir: pathlib.Path) -> str:
+    roots = [salome_dir / "INSTALL"]
+    try:
+        roots.extend(
+            sorted(
+                (
+                    path
+                    for path in salome_dir.glob("BINARIES-*")
+                    if path.is_dir()
+                ),
+                key=lambda path: path.name,
+            )
+        )
+    except OSError:
+        # Keep the installed-layout lookup usable if the distribution root
+        # cannot be enumerated (for example because of filesystem permissions).
+        pass
+
     candidates = (
-        salome_dir / "INSTALL" / "GUI" / "bin" / "salome" / "VERSION",
-        salome_dir / "INSTALL" / "KERNEL" / "bin" / "salome" / "VERSION",
+        root / component / "bin" / "salome" / "VERSION"
+        for root in roots
+        for component in ("GUI", "KERNEL")
     )
     for candidate in candidates:
         try:
