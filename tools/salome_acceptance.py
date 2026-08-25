@@ -499,8 +499,23 @@ def check_smesh_oofem_paraview():
             "reverse_slave": False,
         },
     }
-    settings = solver_settings("contact-static-vtk")
-    settings["nsteps"] = 1
+    # Output form only: the contact-fields VTK record. The engineering
+    # model and its numeric solution controls now live on the Analysis
+    # tab equivalent, passed explicitly below.
+    settings = solver_settings("contact-vtk")
+    analysis = {
+        "oofem_type": "staticstructural",
+        "params": {
+            "nsteps": 1,
+            "rtolv": 1.0e-9,
+            "renumber": 0,
+            "stiffmode": 0,
+            "manrmsteps": 1,
+            "maxiter": 100,
+            "initialguess": 1,
+            "smtype": 0,
+        },
+    }
 
     with tempfile.TemporaryDirectory(prefix="oofem-salome-pipeline-") as directory:
         input_path = Path(directory) / "contact.in"
@@ -511,6 +526,7 @@ def check_smesh_oofem_paraview():
             boundary_conditions,
             load_boundary_condition_templates(),
             solver_settings=settings,
+            analysis=analysis,
             cross_sections=[cross_section],
             contacts=[contact],
         )

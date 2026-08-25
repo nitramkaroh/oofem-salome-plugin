@@ -43,7 +43,20 @@ def _ogden_exporter(parameter_updates):
         materials,
         copy.deepcopy(bcs),
         boundary_templates(),
-        solver_settings={"vtk": False, "nlgeom": True},
+        solver_settings={"vtk": False},
+        # nlgeo has no global default; ogdencompressiblemat requires it
+        # enabled explicitly on the cross section.
+        cross_sections=[
+            {
+                "id": "cs-ogden",
+                "name": "ogden sheet cross section",
+                "oofem_type": "SimpleCS",
+                "material_id": materials[0]["id"],
+                "assigned_group": "sheet",
+                "element_options": {"nlgeo": "on"},
+                "params": {"thick": materials[0]["params"].get("t", 1.0)},
+            }
+        ],
     )
 
 

@@ -686,7 +686,7 @@ def ogden_quad_model():
             "name": "ogden sheet",
             "oofem_type": "ogdencompressiblemat",
             "assigned_group": "sheet",
-            "params": {"k": 0.0, "alpha1": 2.0, "mu1": 20.0},
+            "params": {"k": 0.0, "alpha1": 2.0, "mu1": 20.0, "t": 1.0},
         }
     ]
     return mesh, elem_map, materials, bcs
@@ -700,7 +700,7 @@ def mooney_rivlin_quad_model():
             "name": "mooney-rivlin sheet",
             "oofem_type": "mooneyrivlincompressiblemat",
             "assigned_group": "sheet",
-            "params": {"k": 0.0, "c1": 10.0, "c2": 0.0},
+            "params": {"k": 0.0, "c1": 10.0, "c2": 0.0, "t": 1.0},
         }
     ]
     return mesh, elem_map, materials, bcs
@@ -776,15 +776,133 @@ class ExporterValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(OOFEMValidationError, "overlapping material groups"):
             exporter.validate()
 
+    def test_rejects_surface_load_on_interior_shared_facet(self):
+        # Two triangles sharing edge (20, 30): a surface load on that
+        # interior facet must be rejected, not silently applied from both
+        # sides (which would double the effective load with no warning).
+        mesh = FakeStructuralMesh(
+            groups=[
+                FakeGroup("sheet", fake_smesh.FACE, [100, 101]),
+                FakeGroup("fixed", fake_smesh.NODE, [10]),
+                FakeGroup("shared-edge", fake_smesh.EDGE, [500]),
+            ],
+            connectivity={
+                100: [10, 20, 30],
+                101: [20, 30, 40],
+                500: [20, 30],
+            },
+            element_types={
+                100: ENTITY_ITEMS[2],
+                101: ENTITY_ITEMS[2],
+            },
+            coordinates={
+                10: (0.0, 0.0, 0.0),
+                20: (1.0, 0.0, 0.0),
+                30: (0.0, 1.0, 0.0),
+                40: (1.0, 1.0, 0.0),
+            },
+        )
+        materials = [
+            {
+                "id": "material-2d",
+                "name": "sheet",
+                "oofem_type": "ElasticIsotropic2d",
+                "assigned_group": "sheet",
+                "params": {"E": 1000.0, "nu": 0.25, "t": 1.0},
+            }
+        ]
+        bcs = [
+            {
+                "id": "fixed-1",
+                "name": "fixed",
+                "oofem_type": "Displacement",
+                "assigned_group": "fixed",
+                "params": {"dof": 1, "val": 0.0},
+            },
+            {
+                "id": "shared-edge-load",
+                "name": "interior edge load",
+                "oofem_type": "SurfaceLoad",
+                "assigned_group": "shared-edge",
+                "params": {"dof": 1, "val": 1.0},
+            },
+        ]
+        exporter = OOFEMExporter(
+            mesh, {"Triangle": "TrPlaneStress2d"}, materials, bcs, boundary_templates()
+        )
+        with self.assertRaisesRegex(
+            OOFEMValidationError, "shared by 2 exported material elements"
+        ):
+            exporter.validate()
+
+    def test_rejects_missing_cross_section_area_instead_of_defaulting(self):
+        mesh, mapping, materials, bcs = truss_model()
+        materials[0]["params"].pop("A")
+        exporter = OOFEMExporter(mesh, mapping, materials, bcs, boundary_templates())
+        with self.assertRaisesRegex(OOFEMValidationError, "requires a positive 'area' value"):
+            exporter.validate()
+
+    def test_rejects_missing_cross_section_thickness_instead_of_defaulting(self):
+        mesh, mapping, materials, bcs = plane_stress_model()
+        materials[0]["params"].pop("t")
+        exporter = OOFEMExporter(mesh, mapping, materials, bcs, boundary_templates())
+        with self.assertRaisesRegex(OOFEMValidationError, "requires a positive 'thick' value"):
+            exporter.validate()
+
+    def test_rejects_malformed_vtk_record(self):
+        mesh, mapping, materials, bcs = truss_model()
+        exporter = OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={
+                "vtk": True,
+                "vtk_record": "vtkxml tstep_all domain_all primvars 2 1 cellvars 1 1",
+            },
+        )
+        with self.assertRaisesRegex(
+            OOFEMValidationError, "declares 2 'primvars' but does not provide"
+        ):
+            exporter.validate()
+
+    def test_accepts_well_formed_vtk_record(self):
+        mesh, mapping, materials, bcs = truss_model()
+        exporter = OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={
+                "vtk": True,
+                "vtk_record": (
+                    "vtkxml tstep_all domain_all primvars 1 1 "
+                    "cellvars 4 1 150 151 152"
+                ),
+            },
+        )
+        exporter.validate()
+
 
 @unittest.skipUnless(
     OOFEM_BINARY,
     "set OOFEM_BIN to run generated inputs with a real OOFEM solver",
 )
 class OOFEMSolverIntegrationTests(unittest.TestCase):
-    def solve(self, model_factory, expected_records, solver_settings=None):
+    def solve(
+        self,
+        model_factory,
+        expected_records,
+        solver_settings=None,
+        cross_sections=None,
+    ):
         exporter = OOFEMExporter(
-            *model_factory(), boundary_templates(), solver_settings=solver_settings
+            *model_factory(),
+            boundary_templates(),
+            solver_settings=solver_settings,
+            cross_sections=cross_sections
         )
         with tempfile.TemporaryDirectory() as directory:
             input_path = pathlib.Path(directory) / "salome_model.in"
@@ -917,7 +1035,20 @@ class OOFEMSolverIntegrationTests(unittest.TestCase):
                 "Quad1PlaneStrain 1 nodes 4 1 2 3 4 nlgeo 1",
                 "elementEdges",
             ],
-            solver_settings={"vtk": True, "nlgeom": True, "nsteps": 5},
+            solver_settings={"vtk": True, "nsteps": 5},
+            # nlgeo has no global default; hyperelastic materials need it
+            # enabled explicitly on the cross section.
+            cross_sections=[
+                {
+                    "id": "cs-ogden",
+                    "name": "ogden sheet cross section",
+                    "oofem_type": "SimpleCS",
+                    "material_id": "material-ogden",
+                    "assigned_group": "sheet",
+                    "element_options": {"nlgeo": "on"},
+                    "params": {"thick": 1.0},
+                }
+            ],
         )
         self._assert_nonzero_displacement(output, 2)
 
@@ -929,7 +1060,20 @@ class OOFEMSolverIntegrationTests(unittest.TestCase):
                 "Quad1PlaneStrain 1 nodes 4 1 2 3 4 nlgeo 1",
                 "elementEdges",
             ],
-            solver_settings={"vtk": True, "nlgeom": True, "nsteps": 5},
+            solver_settings={"vtk": True, "nsteps": 5},
+            # nlgeo has no global default; hyperelastic materials need it
+            # enabled explicitly on the cross section.
+            cross_sections=[
+                {
+                    "id": "cs-mooneyrivlin",
+                    "name": "mooney-rivlin sheet cross section",
+                    "oofem_type": "SimpleCS",
+                    "material_id": "material-mooneyrivlin",
+                    "assigned_group": "sheet",
+                    "element_options": {"nlgeo": "on"},
+                    "params": {"thick": 1.0},
+                }
+            ],
         )
         self._assert_nonzero_displacement(output, 2)
 

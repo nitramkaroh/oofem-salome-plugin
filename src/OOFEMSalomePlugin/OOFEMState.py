@@ -25,6 +25,26 @@ STATE_FILE_FORMAT = "OOFEM SALOME project"
 STATE_FILE_VERSION = 1
 
 
+class OOFEMStateVersionError(ValueError):
+    """A genuine OOFEM project file uses an envelope version this plugin
+    build does not understand.
+
+    Distinguished from a plain decode failure (corrupt JSON, or a file that
+    is not an OOFEM project at all) so callers can surface a specific,
+    actionable message instead of silently treating the study as if it had
+    no saved OOFEM state.
+    """
+
+    def __init__(self, found_version):
+        self.found_version = found_version
+        super().__init__(
+            "OOFEM project file has envelope version {!r}, but this plugin "
+            "build only understands version {!r}. Open it with a matching "
+            "plugin version, or start a new OOFEM project in this "
+            "study.".format(found_version, STATE_FILE_VERSION)
+        )
+
+
 def _decode(raw):
     if not raw:
         return {}
@@ -59,10 +79,7 @@ def _decode_file_document(raw):
         _logger.warning("Ignoring a file that is not an OOFEM SALOME project")
         return None
     if document.get("version") != STATE_FILE_VERSION:
-        _logger.warning(
-            "Unsupported OOFEM SALOME project version: %r", document.get("version")
-        )
-        return None
+        raise OOFEMStateVersionError(document.get("version"))
     state = document.get("state")
     if not isinstance(state, dict):
         _logger.warning("Ignoring OOFEM SALOME project with invalid state")
@@ -112,7 +129,10 @@ class OOFEMState:
         """Load a versioned state document used by SALOME openFiles.
 
         None indicates an unreadable or invalid file; an empty dictionary is
-        a valid new project.
+        a valid new project. Raises OOFEMStateVersionError (instead of
+        returning None) for a genuine OOFEM project file whose envelope
+        version this plugin build does not understand, so callers can
+        surface that specific, actionable failure to the user.
         """
         try:
             raw = Path(filename).read_text(encoding="utf-8")

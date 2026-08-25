@@ -74,9 +74,56 @@ class OOFEMExporter:
         "nsteps": 1,
         "vtk": True,
         "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
-        "nlgeom": False,
     }
     ELEMENT_NLGEO_MODES = {"inherit", "on", "off"}
+
+    # Engineering models this exporter can render, keyed by lower-case name.
+    ANALYSIS_ALIASES = {
+        "staticstructural": "StaticStructural",
+        "nonlinearstatic": "NonLinearStatic",
+        "linearstatic": "LinearStatic",
+        "linearstatics": "LinearStatic",
+        "eigenvaluedynamic": "EigenValueDynamic",
+    }
+    # Models driven by a step count rather than an eigenvalue count.
+    STEPPED_ANALYSES = frozenset(
+        {"staticstructural", "nonlinearstatic", "linearstatic", "linearstatics"}
+    )
+    # Stepped models that additionally accept a time-step length.
+    TIME_STEPPED_ANALYSES = frozenset({"staticstructural", "nonlinearstatic"})
+    # OOFEM defaults NonLinearStatic to indirect control, which then makes
+    # steplength mandatory.  Direct (Newton-Raphson) load control is the
+    # predictable default for a GUI-generated model.
+    NONLINEAR_STATIC_DEFAULT_CONTROL_MODE = 1
+    # (source_key, output_key, minimum, minimum_is_inclusive)
+    NONLINEAR_STATIC_FLOAT_SETTINGS = (
+        ("rtolv", "rtolv", 0.0, False),
+        ("rtolf", "rtolf", 0.0, False),
+        ("rtold", "rtold", 0.0, False),
+        ("minsteplength", "minsteplength", 0.0, True),
+    )
+    # (source_key, output_key, minimum)
+    NONLINEAR_STATIC_INTEGER_SETTINGS = (
+        ("renumber", "renumber", 0),
+        ("stiffmode", "stiffMode", 0),
+        ("refloadmode", "refloadmode", 0),
+        ("manrmsteps", "manrmsteps", 0),
+        ("maxiter", "maxiter", 1),
+        ("miniter", "miniter", 0),
+        ("initialguess", "initialguess", 0),
+        ("lstype", "lstype", 0),
+        ("smtype", "smtype", 0),
+    )
+    # Read by the cylindrical arc-length method only (controlmode 0).
+    ARC_LENGTH_FLOAT_SETTINGS = (
+        ("steplength", "steplength", 0.0, False),
+        ("initialsteplength", "initialsteplength", 0.0, False),
+        ("psi", "psi", 0.0, True),
+    )
+    ARC_LENGTH_INTEGER_SETTINGS = (
+        ("reqiterations", "reqIterations", 1),
+        ("maxrestarts", "maxrestarts", 0),
+    )
 
     def __init__(
         self,
@@ -345,6 +392,15 @@ class OOFEMExporter:
             parents = self.boundary_to_parent_map.get(key)
             if not parents:
                 unmatched.append(boundary_id)
+                continue
+            if len(parents) != 1:
+                errors.append(
+                    "Boundary element {} in group '{}' is shared by {} exported "
+                    "material elements; a surface load requires an exterior "
+                    "boundary and would otherwise be applied from every side.".format(
+                        boundary_id, group.GetName(), len(parents)
+                    )
+                )
                 continue
             pairs.extend(parents)
 
@@ -1084,6 +1140,7 @@ class OOFEMExporter:
         analysis_key = str(configured_analysis or "").strip().casefold()
         non_transient_structural_analyses = {
             "staticstructural",
+            "nonlinearstatic",
             "linearstatic",
             "linearstatics",
             "eigenvaluedynamic",
@@ -1332,20 +1389,14 @@ class OOFEMExporter:
             or self.solver_settings.get("engng_model", "StaticStructural")
         )
         key = str(configured_name).lower()
-        aliases = {
-            "staticstructural": "StaticStructural",
-            "linearstatic": "LinearStatic",
-            "linearstatics": "LinearStatic",
-            "eigenvaluedynamic": "EigenValueDynamic",
-        }
-        model_name = aliases.get(key)
+        model_name = self.ANALYSIS_ALIASES.get(key)
         if model_name is None:
             raise OOFEMValidationError(
                 ["Unsupported OOFEM analysis type '{}'.".format(configured_name)]
             )
 
         fields = [model_name]
-        if key in ("staticstructural", "linearstatic", "linearstatics"):
+        if key in self.STEPPED_ANALYSES:
             nsteps = max(
                 1,
                 int(
@@ -1355,10 +1406,10 @@ class OOFEMExporter:
                 ),
             )
             fields.extend(("nsteps", str(nsteps)))
-            if key == "staticstructural" and parameters.get("deltat") is not None:
-                fields.extend(
-                    ("deltat", self._format_number(parameters.get("deltat")))
-                )
+            if key in self.TIME_STEPPED_ANALYSES:
+                deltat = self._analysis_setting(parameters, "deltat")
+                if deltat is not None:
+                    fields.extend(("deltat", self._format_number(deltat)))
         else:
             nroot = max(1, int(parameters.get("nroot", 5)))
             rtolv = float(parameters.get("rtolv", 1.0e-6))
@@ -1368,50 +1419,178 @@ class OOFEMExporter:
         if module_count:
             fields.extend(("nmodules", str(module_count)))
         if key == "staticstructural":
-            rtolv = parameters.get("rtolv", self.solver_settings.get("rtolv"))
-            if rtolv is not None:
-                rtolv = float(rtolv)
-                if not math.isfinite(rtolv) or rtolv <= 0.0:
-                    raise ValueError("rtolv must be a positive finite number")
-                fields.extend(("rtolv", self._format_number(rtolv)))
-
-            integer_settings = (
-                ("renumber", "renumber", 0),
-                ("stiffmode", "stiffMode", 0),
-                ("manrmsteps", "manrmsteps", 0),
-                ("maxiter", "maxiter", 1),
-                ("initialguess", "initialguess", 0),
-                ("smtype", "smtype", 0),
-            )
-            for source_key, output_key, minimum in integer_settings:
-                value = parameters.get(
-                    source_key,
-                    parameters.get(
-                        output_key,
-                        self.solver_settings.get(source_key),
+            fields.extend(
+                self._solver_control_fields(
+                    parameters,
+                    (("rtolv", "rtolv", 0.0, False),),
+                    (
+                        ("renumber", "renumber", 0),
+                        ("stiffmode", "stiffMode", 0),
+                        ("manrmsteps", "manrmsteps", 0),
+                        ("maxiter", "maxiter", 1),
+                        ("initialguess", "initialguess", 0),
+                        ("smtype", "smtype", 0),
                     ),
                 )
-                if value is None:
-                    continue
-                if isinstance(value, bool):
-                    raise ValueError("{} must be an integer".format(output_key))
-                numeric_value = float(value)
-                if (
-                    not math.isfinite(numeric_value)
-                    or not numeric_value.is_integer()
-                    or numeric_value < minimum
-                ):
-                    raise ValueError(
-                        "{} must be an integer greater than or equal to {}".format(
-                            output_key, minimum
-                        )
-                    )
-                fields.extend((output_key, str(int(numeric_value))))
+            )
+        elif key == "nonlinearstatic":
+            fields.extend(self._nonlinear_static_control_fields(parameters))
         return " ".join(fields)
 
+    def _analysis_setting(self, parameters, key, output_key=None):
+        """Resolve one analysis parameter, falling back to the solver preset.
+
+        The OOFEM-cased ``output_key`` is accepted as an alternative name at
+        both levels so hand-edited projects and presets keep working, while an
+        explicit project parameter always wins over the selected preset.
+        """
+        keys = (key,) if output_key in (None, key) else (key, output_key)
+        for source in (parameters, self.solver_settings):
+            for candidate in keys:
+                if source.get(candidate) is not None:
+                    return source[candidate]
+        return None
+
+    def _solver_control_fields(self, parameters, float_settings, integer_settings):
+        """Render validated numerical-control fields for an engineering model.
+
+        ``float_settings`` entries are ``(source_key, output_key, minimum,
+        inclusive)`` and ``integer_settings`` entries are ``(source_key,
+        output_key, minimum)``.  Both accept the OOFEM-cased output key as an
+        alternative source key so hand-edited projects keep working.
+        """
+        fields = []
+        for source_key, output_key, minimum, inclusive in float_settings:
+            value = self._analysis_setting(parameters, source_key, output_key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ValueError("{} must be a number".format(output_key))
+            numeric_value = float(value)
+            if not math.isfinite(numeric_value) or (
+                numeric_value < minimum
+                if inclusive
+                else numeric_value <= minimum
+            ):
+                raise ValueError(
+                    "{} must be a finite number {} {:g}".format(
+                        output_key,
+                        "greater than or equal to" if inclusive else "greater than",
+                        minimum,
+                    )
+                )
+            fields.extend((output_key, self._format_number(numeric_value)))
+
+        for source_key, output_key, minimum in integer_settings:
+            value = self._analysis_setting(parameters, source_key, output_key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ValueError("{} must be an integer".format(output_key))
+            numeric_value = float(value)
+            if (
+                not math.isfinite(numeric_value)
+                or not numeric_value.is_integer()
+                or numeric_value < minimum
+            ):
+                raise ValueError(
+                    "{} must be an integer greater than or equal to {}".format(
+                        output_key, minimum
+                    )
+                )
+            fields.extend((output_key, str(int(numeric_value))))
+        return fields
+
+    def _nonlinear_static_control_fields(self, parameters):
+        """Render the NonLinearStatic solution controls for the active control mode.
+
+        OOFEM builds the numerical method from ``controlmode``: direct control
+        uses NRSolver while indirect control uses the cylindrical arc-length
+        method.  Both read their fields from the same (default meta step)
+        record, so the two field sets must not be mixed -- OOFEM would silently
+        ignore the fields belonging to the other solver.
+        """
+        control_mode = self._analysis_setting(parameters, "controlmode")
+        if control_mode is None:
+            control_mode = self.NONLINEAR_STATIC_DEFAULT_CONTROL_MODE
+        if isinstance(control_mode, bool):
+            raise ValueError("controlmode must be an integer")
+        numeric_mode = float(control_mode)
+        if not numeric_mode.is_integer() or int(numeric_mode) not in (0, 1):
+            raise ValueError(
+                "controlmode must be 0 (indirect arc-length) or 1 (direct)"
+            )
+        control_mode = int(numeric_mode)
+
+        arc_length_only = tuple(
+            (source_key, output_key)
+            for source_key, output_key, _minimum, _inclusive in (
+                self.ARC_LENGTH_FLOAT_SETTINGS
+            )
+        ) + tuple(
+            (source_key, output_key)
+            for source_key, output_key, _minimum in (
+                self.ARC_LENGTH_INTEGER_SETTINGS
+            )
+        )
+        if control_mode == 1:
+            ignored = [
+                source_key
+                for source_key, output_key in arc_length_only
+                if self._analysis_setting(parameters, source_key, output_key)
+                is not None
+            ]
+            if ignored:
+                raise ValueError(
+                    "{} applies to indirect arc-length control only; set "
+                    "controlmode 0 or remove it".format(ignored[0])
+                )
+        elif self._analysis_setting(parameters, "steplength") is None:
+            raise ValueError(
+                "indirect arc-length control (controlmode 0) requires steplength"
+            )
+
+        fields = ["controlmode", str(control_mode)]
+        fields.extend(
+            self._solver_control_fields(
+                parameters,
+                self.NONLINEAR_STATIC_FLOAT_SETTINGS
+                + (
+                    self.ARC_LENGTH_FLOAT_SETTINGS
+                    if control_mode == 0
+                    else ()
+                ),
+                self.NONLINEAR_STATIC_INTEGER_SETTINGS
+                + (
+                    self.ARC_LENGTH_INTEGER_SETTINGS
+                    if control_mode == 0
+                    else ()
+                ),
+            )
+        )
+        if self._analysis_flag_enabled(parameters, "updateelasticstiffnessflag"):
+            fields.append("updateelasticstiffnessflag")
+        return fields
+
+    def _analysis_flag_enabled(self, parameters, key):
+        """Resolve a valueless OOFEM keyword flag from an integer 0/1 parameter."""
+        value = self._analysis_setting(parameters, key)
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        numeric_value = float(value)
+        if not numeric_value.is_integer() or int(numeric_value) not in (0, 1):
+            raise ValueError("{} must be 0 or 1".format(key))
+        return int(numeric_value) == 1
+
     def _nonlinear_geometry_enabled(self):
-        """Return the inherited nlgeo default from the selected solver preset."""
-        return self.solver_settings.get("nlgeom") is True
+        """Default large-strain kinematics for elements left on "inherit".
+
+        There is no global nlgeo toggle: it is set per cross section (see
+        `_element_nonlinear_geometry_enabled`), so "inherit" always means off.
+        """
+        return False
 
     def _element_nonlinear_geometry_enabled(self, salome_element_id):
         """Resolve the nlgeo flag for one continuum element record."""
@@ -1612,23 +1791,14 @@ class OOFEMExporter:
             elif "planestress" in element_type or "planestrain" in element_type:
                 required_parameter = "thick"
             if required_parameter and parameters.get(required_parameter) is None:
-                if (
-                    not self._uses_explicit_cross_sections
-                    or material.get("assigned_group") == group_name
-                ):
-                    cross_section = dict(cross_section)
-                    parameters = dict(parameters)
-                    parameters[required_parameter] = 1.0
-                    cross_section["params"] = parameters
-                else:
-                    errors.append(
-                        "Cross section '{}' requires a positive '{}' value for {} elements.".format(
-                            cross_section.get("name", "Unnamed"),
-                            required_parameter,
-                            element_type,
-                        )
+                errors.append(
+                    "Cross section '{}' requires a positive '{}' value for {} elements.".format(
+                        cross_section.get("name", "Unnamed"),
+                        required_parameter,
+                        element_type,
                     )
-                    continue
+                )
+                continue
 
             valid_parameters = True
             for key, value in parameters.items():
@@ -1792,9 +1962,79 @@ class OOFEMExporter:
 
         if not self._cross_sections_to_export:
             errors.append("No cross section could be created from the material assignments.")
+        if self.solver_settings.get("vtk", False):
+            errors.extend(
+                self._validate_vtk_record(
+                    self.solver_settings.get(
+                        "vtk_record", self.DEFAULT_SOLVER_SETTINGS["vtk_record"]
+                    )
+                )
+            )
         if errors:
             raise OOFEMValidationError(errors)
         self._prepared = True
+
+    @staticmethod
+    def _validate_vtk_record(record):
+        """Sanity-check a solver preset's raw 'vtk_record' export-module line.
+
+        This is written verbatim into the .in file, so a malformed value
+        (wrong type, embedded newline, or a primvars/cellvars count that
+        doesn't match the number of IDs following it) would otherwise only
+        surface as a confusing OOFEM parse error or a crash deep in
+        ``str.write``.
+        """
+        errors = []
+        if not isinstance(record, str) or not record.strip():
+            errors.append(
+                "Solver preset 'vtk_record' must be a non-empty string, got {!r}.".format(
+                    record
+                )
+            )
+            return errors
+        if "\n" in record or "\r" in record:
+            errors.append("Solver preset 'vtk_record' must not contain a newline.")
+            return errors
+
+        def _is_int_token(value):
+            try:
+                int(value)
+            except (TypeError, ValueError):
+                return False
+            return True
+
+        tokens = record.split()
+        if not tokens or tokens[0].lower() != "vtkxml":
+            errors.append(
+                "Solver preset 'vtk_record' must start with the 'vtkxml' export "
+                "module keyword, got {!r}.".format(record)
+            )
+            return errors
+
+        for keyword in ("primvars", "cellvars"):
+            for index, token in enumerate(tokens):
+                if token.lower() != keyword:
+                    continue
+                count_text = tokens[index + 1] if index + 1 < len(tokens) else None
+                try:
+                    count = int(count_text)
+                    if count < 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    errors.append(
+                        "Solver preset 'vtk_record' has '{}' not followed by a "
+                        "non-negative integer count.".format(keyword)
+                    )
+                    continue
+                ids = tokens[index + 2 : index + 2 + count]
+                if len(ids) != count or not all(
+                    _is_int_token(value) for value in ids
+                ):
+                    errors.append(
+                        "Solver preset 'vtk_record' declares {} '{}' but does not "
+                        "provide that many integer IDs.".format(count, keyword)
+                    )
+        return errors
 
     def validate(self):
         self._prepare_records()

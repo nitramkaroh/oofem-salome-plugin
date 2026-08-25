@@ -17,6 +17,7 @@ from OOFEMSalomePlugin.OOFEMState import (  # noqa: E402
     STATE_FILE_VERSION,
     STATE_OBJECT_NAME,
     OOFEMState,
+    OOFEMStateVersionError,
 )
 
 
@@ -147,10 +148,26 @@ class OOFEMStateTests(unittest.TestCase):
             path.write_text("not-json", encoding="utf-8")
             self.assertIsNone(OOFEMState.load_file(path))
             path.write_text(
-                json.dumps({"format": STATE_FILE_FORMAT, "version": 999, "state": {}}),
+                json.dumps({"format": "not-an-oofem-project", "state": {}}),
                 encoding="utf-8",
             )
             self.assertIsNone(OOFEMState.load_file(path))
+
+    def test_mismatched_envelope_version_raises_instead_of_silently_dropping(self):
+        # A genuine OOFEM project file saved by an incompatible plugin
+        # version must be reported as a specific, actionable failure, not
+        # silently treated as if the study had no saved OOFEM state at all.
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / STATE_FILE_NAME
+            path.write_text(
+                json.dumps(
+                    {"format": STATE_FILE_FORMAT, "version": 999, "state": {}}
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(OOFEMStateVersionError) as raised:
+                OOFEMState.load_file(path)
+            self.assertEqual(raised.exception.found_version, 999)
 
     def test_round_trip_uses_salome_attribute_string(self):
         study = FakeStudy()

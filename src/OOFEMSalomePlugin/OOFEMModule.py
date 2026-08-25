@@ -9,7 +9,11 @@ from OOFEMSalomePlugin.OOFEMProject import (
     migrate_project_state,
     parse_project_schema_version,
 )
-from OOFEMSalomePlugin.OOFEMState import OOFEMState, STATE_FILE_NAME
+from OOFEMSalomePlugin.OOFEMState import (
+    OOFEMState,
+    OOFEMStateVersionError,
+    STATE_FILE_NAME,
+)
 
 
 _oofem_module_instance = None
@@ -104,6 +108,7 @@ class OOFEMModule:
         self.context = None
         self._study_sessions = {}
         self._active_study_key = _NO_STUDY_KEY
+        self._dock_visibility_generation = 0
         self._ensure_session(None)
 
     def _ensure_session(self, study):
@@ -202,6 +207,76 @@ class OOFEMModule:
             main_window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self.debug_console)
             self.debug_console.hide()
 
+    # SALOME restores its saved per-module window layout only after the
+    # activate()/deactivate() callback has returned, so assert the state we
+    # want repeatedly over a short window rather than once.
+    _DOCK_VISIBILITY_DELAYS_MS = (0, 120, 400)
+
+    def _reveal_dock(self):
+        """Make the OOFEM dock visible and bring it to the front."""
+        if self.dock is None:
+            return False
+        try:
+            self.dock.show()
+            self.dock.raise_()
+        except Exception:
+            _logger.debug("Could not reveal the OOFEM dock", exc_info=True)
+            return False
+        return True
+
+    def _conceal_dock(self):
+        """Hide the OOFEM dock."""
+        if self.dock is None:
+            return False
+        try:
+            self.dock.hide()
+        except Exception:
+            _logger.debug("Could not hide the OOFEM dock", exc_info=True)
+            return False
+        return True
+
+    def _assert_dock_visibility(self, visible):
+        """Apply a dock visibility now and hold it against SALOME's restore.
+
+        LightApp_Application::loadDockWindowsState() calls
+        desktop()->restoreState() with a layout keyed on the active
+        module's name, and it runs *after* this module's activate() or
+        deactivate() callback returns. A stale saved layout therefore
+        silently undoes whatever we just did -- in both directions. Real
+        example from this install: the layout had the dock hidden under
+        the "OOFEM" key and visible under "nomodule", so activating the
+        module appeared to do nothing, and deactivating it left the panel
+        on screen.
+
+        A generation counter makes the last call win, so a quick
+        activate/deactivate pair cannot leave earlier timers fighting the
+        newer intent.
+        """
+        self._dock_visibility_generation += 1
+        generation = self._dock_visibility_generation
+        applied = self._apply_dock_visibility(generation, visible)
+        for delay in self._DOCK_VISIBILITY_DELAYS_MS:
+            try:
+                QtCore.QTimer.singleShot(
+                    delay,
+                    lambda g=generation, v=visible: self._apply_dock_visibility(
+                        g, v
+                    ),
+                )
+            except Exception:
+                _logger.debug(
+                    "Could not schedule the OOFEM dock visibility update",
+                    exc_info=True,
+                )
+                break
+        return applied
+
+    def _apply_dock_visibility(self, generation, visible):
+        """Apply one scheduled visibility intent, unless it was superseded."""
+        if generation != self._dock_visibility_generation:
+            return False
+        return self._reveal_dock() if visible else self._conceal_dock()
+
     def _connect_widget_state(self):
         """Connect the live editor to this module instance exactly once."""
         if self.dock is None:
@@ -249,8 +324,7 @@ class OOFEMModule:
                 return None
             self._ensure_widgets(main_window)
             self._connect_widget_state()
-            self.dock.show()
-            self.dock.raise_()
+            self._assert_dock_visibility(True)
             self.dock.mainWidget.populateAll(study=study, state=session.state)
             if isinstance(self.dock.mainWidget.state, dict):
                 session.state = self.dock.mainWidget.state
@@ -355,9 +429,14 @@ class OOFEMModule:
         directory = files[0]
         names = list(files[1:])
         preferred = [name for name in names if os.path.basename(name) == STATE_FILE_NAME]
+        version_error = None
         for name in preferred + [name for name in names if name not in preferred]:
             filename = name if os.path.isabs(name) else os.path.join(directory, name)
-            state = OOFEMState.load_file(filename)
+            try:
+                state = OOFEMState.load_file(filename)
+            except OOFEMStateVersionError as error:
+                version_error = error
+                continue
             if state is None:
                 continue
             try:
@@ -371,6 +450,17 @@ class OOFEMModule:
             self.study_url = url or ""
             self.set_study_state(prepared_state, refresh=True)
             return True
+        if version_error is not None:
+            _logger.warning("%s", version_error)
+            try:
+                QtWidgets.QMessageBox.warning(
+                    None, "OOFEM Project", str(version_error)
+                )
+            except Exception:
+                _logger.debug(
+                    "Could not show the OOFEM version-mismatch dialog",
+                    exc_info=True,
+                )
         return False
 
     def close_study(self):
@@ -419,8 +509,15 @@ class OOFEMModule:
             self.debug_console.raise_()
 
     def deactivate(self):
-        if self.dock is not None:
-            self.dock.hide()
+        """Hide the OOFEM panel when SALOME switches the active module away.
+
+        This mirrors how every other SALOME module behaves: the panel
+        belongs to the module, so deselecting the module in the selector
+        takes its windows away again. Held against SALOME's own layout
+        restore, which would otherwise put the panel straight back if the
+        saved "nomodule" layout happens to record it as visible.
+        """
+        self._assert_dock_visibility(False)
 
 
 def getModule():

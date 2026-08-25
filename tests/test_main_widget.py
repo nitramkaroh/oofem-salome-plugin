@@ -68,6 +68,7 @@ except Exception as error:  # pragma: no cover - environment without Qt bindings
 
 if QtWidgets is not None:
     from OOFEMSalomePlugin.OOFEMMainWidget import OOFEMMainWidget
+    from OOFEMSalomePlugin.OOFEMCrossSectionDialog import OOFEMCrossSectionDialog
 
     _APPLICATION = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
@@ -285,9 +286,82 @@ class MainWidgetWorkflowTests(unittest.TestCase):
         dof_item = self.widget.bcPropsTable.item(0, 1)
         dof_item.setText("not-a-number")
         self.assertEqual(self.widget.state["bcs"][0]["params"]["dof"], 1)
+        # The rejected text must not linger in the cell as if it had been
+        # applied: it should be reverted to the last known-good value.
+        self.assertEqual(dof_item.text(), "1")
 
         dof_item.setText("2")
         self.assertEqual(self.widget.state["bcs"][0]["params"]["dof"], 2)
+
+    def test_material_property_edit_rejects_non_finite_value_and_reverts_cell(self):
+        self._add_sheet_material()
+        self.widget.matTable.selectRow(0)
+
+        # Column order follows OOFEMMaterials.json: E, nu, t, d (optional), alpha (optional).
+        e_item = self.widget.matPropsTable.item(0, 1)
+        for bad_value in ("nan", "inf", "-inf", "not-a-number"):
+            e_item.setText(bad_value)
+            self.assertEqual(
+                self.widget.state["materials"][0]["params"]["E"], 1000.0
+            )
+            self.assertEqual(e_item.text(), "1000.0")
+
+        e_item.setText("2100.5")
+        self.assertEqual(
+            self.widget.state["materials"][0]["params"]["E"], 2100.5
+        )
+
+    def test_edit_cross_section_group_resyncs_material_and_removal_clears_it(self):
+        self._add_sheet_material()
+        material = self.widget.state["materials"][0]
+
+        with unittest.mock.patch.object(
+            OOFEMCrossSectionDialog,
+            "run",
+            return_value={
+                "id": "cs-1",
+                "name": "sheet cross section",
+                "oofem_type": "simplecs",
+                "material_id": material["id"],
+                "assigned_group": "MAT_FACES",
+                "element_options": {"nlgeo": "inherit"},
+                "params": {"thick": 1.0},
+            },
+        ):
+            self.widget.addCrossSection()
+
+        self.assertEqual(material.get("assigned_group"), "MAT_FACES")
+
+        # Retarget the cross section to a different mesh group: the
+        # material's own (legacy-fallback) assigned_group must follow it,
+        # or the Materials tab -- and later a cross-section deletion -- go
+        # stale relative to what is actually being exported.
+        self.widget.crossSectionTable.selectRow(0)
+        with unittest.mock.patch.object(
+            OOFEMCrossSectionDialog,
+            "run",
+            return_value={
+                "id": "cs-1",
+                "name": "sheet cross section",
+                "oofem_type": "simplecs",
+                "material_id": material["id"],
+                "assigned_group": "BC_FIXED",
+                "element_options": {"nlgeo": "inherit"},
+                "params": {"thick": 1.0},
+            },
+        ):
+            self.widget.editCrossSection()
+
+        self.assertEqual(material.get("assigned_group"), "BC_FIXED")
+        self.assertEqual(self.widget.matTable.item(0, 2).text(), "BC_FIXED")
+
+        # Removing the only cross section referencing this material must
+        # clear its now-unowned assigned_group rather than leaving a value
+        # the user moved away from to be silently reused by the exporter's
+        # legacy per-material fallback once no cross section is left.
+        self.widget.crossSectionTable.selectRow(0)
+        self.widget.removeCrossSection()
+        self.assertIsNone(material.get("assigned_group"))
 
     def test_validate_model_reports_domain_and_counts_for_configured_mesh(self):
         self._add_sheet_material()

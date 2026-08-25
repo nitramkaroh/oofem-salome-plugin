@@ -86,6 +86,33 @@ class SalomeLifecycleTests(unittest.TestCase):
                 sys.modules.update(previous_modules)
                 sys.path[:] = previous_path
 
+    def test_close_study_does_not_propagate_module_exceptions(self):
+        # saveFiles/openFiles already degrade gracefully on failure;
+        # closeStudy() must do the same instead of letting an exception
+        # from the module's session teardown cross the SALOME module-engine
+        # boundary and interrupt the study-close sequence mid-way.
+        spec = importlib.util.spec_from_file_location(
+            "test_close_study_OOFEMGUI", MODULE_ADAPTER
+        )
+        adapter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(adapter)
+
+        class ExplodingModule:
+            def close_study(self):
+                raise RuntimeError("boom")
+
+        fake_module_pkg = types.ModuleType("OOFEMSalomePlugin.OOFEMModule")
+        fake_module_pkg.getModule = lambda: ExplodingModule()
+        previous = sys.modules.get("OOFEMSalomePlugin.OOFEMModule")
+        sys.modules["OOFEMSalomePlugin.OOFEMModule"] = fake_module_pkg
+        try:
+            adapter.closeStudy()
+        finally:
+            if previous is None:
+                sys.modules.pop("OOFEMSalomePlugin.OOFEMModule", None)
+            else:
+                sys.modules["OOFEMSalomePlugin.OOFEMModule"] = previous
+
     def test_loads_existing_smesh_component_like_asterstudy(self):
         calls = []
         component = object()
@@ -285,6 +312,8 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                 "</document>\n"
             )
             salome_resource.write_text(original_resource, encoding="utf-8")
+            salome_resource.chmod(0o644)
+            original_resource_mode = stat.S_IMODE(salome_resource.stat().st_mode)
 
             environment = os.environ.copy()
             environment["XDG_CONFIG_HOME"] = str(
@@ -470,6 +499,23 @@ class SalomeModuleInstallerTests(unittest.TestCase):
                     encoding="utf-8"
                 ),
                 original_resource,
+            )
+            # The replacement is a same-directory rename, not a truncate-in-
+            # place `cp`: confirm the shared SalomeApp.xml's original mode
+            # survives (mktemp's own default is 600, which would otherwise
+            # lock out every other SALOME user on this install) and that no
+            # leftover temp file was left behind by the rename.
+            self.assertEqual(
+                stat.S_IMODE(salome_resource.stat().st_mode),
+                original_resource_mode,
+            )
+            self.assertEqual(
+                [
+                    entry.name
+                    for entry in salome_resource.parent.iterdir()
+                    if entry.name.startswith(".oofem-SalomeApp.")
+                ],
+                [],
             )
 
     def test_installs_from_unpacked_native_layout_without_install_tree(self):

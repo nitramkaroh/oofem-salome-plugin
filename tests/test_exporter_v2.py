@@ -148,15 +148,16 @@ class ExporterV2Tests(unittest.TestCase):
             model = path.read_text(encoding="utf-8")
         self.assertIn("SimpleCS 1 thick 0.75 material 1 set 1", model)
 
-    def test_element_nlgeo_mode_overrides_or_inherits_solver_default(self):
+    def test_element_nlgeo_mode_overrides_or_defaults_to_off(self):
+        # There is no global nlgeo toggle: "inherit" always means off, same
+        # as "off"; only an explicit "on" enables large-strain kinematics.
         cases = (
-            ("on", False, True),
-            ("off", True, False),
-            ("inherit", True, True),
-            ("inherit", False, False),
+            ("on", True),
+            ("off", False),
+            ("inherit", False),
         )
-        for mode, solver_default, expected_enabled in cases:
-            with self.subTest(mode=mode, solver_default=solver_default):
+        for mode, expected_enabled in cases:
+            with self.subTest(mode=mode):
                 mesh, mapping, materials, bcs, cross_sections = (
                     _explicit_plane_stress_model()
                 )
@@ -167,10 +168,7 @@ class ExporterV2Tests(unittest.TestCase):
                     materials,
                     bcs,
                     boundary_templates(),
-                    solver_settings={
-                        "vtk": False,
-                        "nlgeom": solver_default,
-                    },
+                    solver_settings={"vtk": False},
                     cross_sections=cross_sections,
                 )
                 with tempfile.TemporaryDirectory() as directory:
@@ -204,9 +202,11 @@ class ExporterV2Tests(unittest.TestCase):
         ):
             exporter.validate()
 
-    def test_analysis_param_does_not_override_inherited_solver_default(self):
+    def test_analysis_and_solver_settings_params_never_control_nlgeo(self):
+        # nlgeo is set only via a cross section's element_options; neither
+        # analysis params nor solver_settings (output form) are a channel
+        # for it, even under a key literally named "nlgeom".
         exporter = self._plane_exporter(
-            solver_settings={"vtk": False, "nlgeom": False},
             analysis={
                 "oofem_type": "StaticStructural",
                 "params": {"nsteps": 1, "nlgeom": True},
@@ -238,7 +238,7 @@ class ExporterV2Tests(unittest.TestCase):
             materials,
             bcs,
             boundary_templates(),
-            solver_settings={"vtk": False, "nlgeom": True},
+            solver_settings={"vtk": False},
             cross_sections=[cross_section],
         )
 
@@ -255,7 +255,7 @@ class ExporterV2Tests(unittest.TestCase):
             materials,
             bcs,
             boundary_templates(),
-            solver_settings={"vtk": False, "nlgeom": False},
+            solver_settings={"vtk": False},
             cross_sections=[enabled],
         ).validate()
 
@@ -405,6 +405,170 @@ class ExporterV2Tests(unittest.TestCase):
                     header = path.read_text(encoding="utf-8").splitlines()[2]
                 self.assertEqual(header, expected_header)
 
+    def _analysis_header(self, **overrides):
+        exporter = self._plane_exporter(**overrides)
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "analysis.in"
+            exporter.export(str(path))
+            return path.read_text(encoding="utf-8").splitlines()[2]
+
+    def test_nonlinear_static_headers_per_control_mode(self):
+        cases = [
+            (
+                "direct",
+                {
+                    "nsteps": 5,
+                    "controlmode": 1,
+                    "stiffmode": 0,
+                    "rtolv": 1.0e-6,
+                    "maxiter": 50,
+                    "deltat": 1.0,
+                    "refloadmode": 0,
+                    "manrmsteps": 1,
+                    "miniter": 2,
+                    "minsteplength": 0.01,
+                },
+                "NonLinearStatic nsteps 5 deltat 1 controlmode 1 rtolv 1e-06 "
+                "minsteplength 0.01 stiffMode 0 refloadmode 0 manrmsteps 1 "
+                "maxiter 50 miniter 2",
+            ),
+            (
+                # OOFEM itself defaults to indirect control, which would then
+                # make steplength mandatory; the exporter picks direct control
+                # so a project carrying only nsteps stays solvable.
+                "defaults-to-direct-control",
+                {"nsteps": 3},
+                "NonLinearStatic nsteps 3 controlmode 1",
+            ),
+            (
+                "arc-length",
+                {
+                    "nsteps": 8,
+                    "controlmode": 0,
+                    "stiffmode": 1,
+                    "rtolv": 1.0e-6,
+                    "maxiter": 100,
+                    "steplength": 0.5,
+                    "initialsteplength": 0.25,
+                    "psi": 1.0,
+                    "reqiterations": 5,
+                    "maxrestarts": 2,
+                },
+                "NonLinearStatic nsteps 8 controlmode 0 rtolv 1e-06 "
+                "steplength 0.5 initialsteplength 0.25 psi 1 stiffMode 1 "
+                "maxiter 100 reqIterations 5 maxrestarts 2",
+            ),
+            (
+                # A valueless OOFEM keyword flag driven by an integer 0/1.
+                "elastic-stiffness-flag",
+                {"nsteps": 2, "stiffmode": 2, "updateelasticstiffnessflag": 1},
+                "NonLinearStatic nsteps 2 controlmode 1 stiffMode 2 "
+                "updateelasticstiffnessflag",
+            ),
+            (
+                "elastic-stiffness-flag-disabled",
+                {"nsteps": 2, "stiffmode": 2, "updateelasticstiffnessflag": 0},
+                "NonLinearStatic nsteps 2 controlmode 1 stiffMode 2",
+            ),
+        ]
+
+        for name, parameters, expected_header in cases:
+            with self.subTest(case=name):
+                header = self._analysis_header(
+                    analysis={
+                        "id": "analysis-nonlinear",
+                        "oofem_type": "NonLinearStatic",
+                        "params": parameters,
+                    }
+                )
+                self.assertEqual(header, expected_header)
+
+    def test_nonlinear_static_controls_fall_back_to_solver_preset(self):
+        analysis = {
+            "id": "analysis-nonlinear",
+            "oofem_type": "NonLinearStatic",
+            "params": {"nsteps": 4},
+        }
+        preset = {
+            "vtk": False,
+            "controlmode": 0,
+            "stiffmode": 1,
+            "rtolv": 1.0e-5,
+            "maxiter": 200,
+            "steplength": 1.0,
+        }
+        self.assertEqual(
+            self._analysis_header(analysis=analysis, solver_settings=preset),
+            "NonLinearStatic nsteps 4 controlmode 0 rtolv 1e-05 steplength 1 "
+            "stiffMode 1 maxiter 200",
+        )
+
+        overridden = copy.deepcopy(analysis)
+        overridden["params"].update({"rtolv": 1.0e-9, "maxiter": 7})
+        self.assertEqual(
+            self._analysis_header(
+                analysis=overridden, solver_settings=preset
+            ),
+            "NonLinearStatic nsteps 4 controlmode 0 rtolv 1e-09 steplength 1 "
+            "stiffMode 1 maxiter 7",
+        )
+
+    def test_nonlinear_static_rejects_inconsistent_solution_controls(self):
+        cases = [
+            (
+                {"nsteps": 2, "controlmode": 0},
+                "indirect arc-length control \\(controlmode 0\\) requires "
+                "steplength",
+            ),
+            (
+                {"nsteps": 2, "controlmode": 1, "psi": 1.0},
+                "psi applies to indirect arc-length control only",
+            ),
+            (
+                {"nsteps": 2, "controlmode": 1, "reqIterations": 5},
+                "reqiterations applies to indirect arc-length control only",
+            ),
+            ({"nsteps": 2, "controlmode": 3}, "controlmode must be 0"),
+            ({"nsteps": 2, "controlmode": True}, "controlmode must be an integer"),
+            (
+                {"nsteps": 2, "stiffmode": -1},
+                "stiffMode must be an integer greater than or equal to 0",
+            ),
+            (
+                {"nsteps": 2, "maxiter": 0},
+                "maxiter must be an integer greater than or equal to 1",
+            ),
+            (
+                {"nsteps": 2, "rtolv": 0.0},
+                "rtolv must be a finite number greater than 0",
+            ),
+            (
+                {"nsteps": 2, "minsteplength": -1.0},
+                "minsteplength must be a finite number greater than or equal to 0",
+            ),
+            (
+                {"nsteps": 2, "updateelasticstiffnessflag": 2},
+                "updateelasticstiffnessflag must be 0 or 1",
+            ),
+        ]
+
+        for parameters, expected_message in cases:
+            with self.subTest(params=sorted(parameters)):
+                exporter = self._plane_exporter(
+                    analysis={
+                        "id": "analysis-nonlinear",
+                        "oofem_type": "NonLinearStatic",
+                        "params": parameters,
+                    }
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    path = pathlib.Path(directory) / "must-not-exist.in"
+                    with self.assertRaisesRegex(
+                        OOFEMValidationError, expected_message
+                    ):
+                        exporter.validate()
+                    self.assertFalse(path.exists())
+
     def test_invalid_float_lists_and_time_references_fail_validation_before_write(self):
         invalid_time_functions = [
             {
@@ -546,6 +710,96 @@ class ExporterV2SolverTests(unittest.TestCase):
         self.assertAlmostEqual(
             first_displacement / final_displacement, 0.2, delta=1.0e-9
         )
+
+    def _run_nonlinear_static(self, parameters, directory):
+        mesh, mapping, materials, bcs, cross_sections = (
+            _explicit_plane_stress_model(thickness=1.0)
+        )
+        exporter = OOFEMExporter(
+            mesh,
+            mapping,
+            materials,
+            bcs,
+            boundary_templates(),
+            solver_settings={"vtk": False},
+            cross_sections=cross_sections,
+            analysis={
+                "id": "analysis-nonlinear",
+                "oofem_type": "NonLinearStatic",
+                "params": parameters,
+            },
+        )
+        input_path = pathlib.Path(directory) / "nonlinear-plane.in"
+        exporter.export(str(input_path))
+        result = subprocess.run(
+            [OOFEM_BINARY, "-f", str(input_path)],
+            cwd=directory,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 error(s)", result.stdout)
+        return result, input_path.with_suffix(".out").read_text(encoding="utf-8")
+
+    def test_nonlinear_static_load_control_increments_the_reference_load(self):
+        # NonLinearStatic under direct control fixes the load level after every
+        # step (NonLinearStatic::updateLoadVectors), so the time function gives
+        # the load *increment* per step rather than the total load at that time
+        # as in StaticStructural.  A constant reference load therefore walks the
+        # equilibrium path in equal increments.
+        with tempfile.TemporaryDirectory() as directory:
+            result, output = self._run_nonlinear_static(
+                {
+                    "nsteps": 4,
+                    "controlmode": 1,
+                    "stiffmode": 0,
+                    "rtolv": 1.0e-9,
+                    "maxiter": 50,
+                    "deltat": 1.0,
+                },
+                directory,
+            )
+
+        self.assertIn("NRSolver", result.stdout)
+        increment = 3.53553391e-3
+        # Direct control starts its step times at the initial time, not deltat.
+        for step, step_time in enumerate((0.0, 1.0, 2.0, 3.0), start=1):
+            self.assertAlmostEqual(
+                self._dof_displacement(output, step_time, 3, 1),
+                step * increment,
+                delta=1.0e-9,
+                msg="step {}".format(step),
+            )
+
+    def test_nonlinear_static_arc_length_control_passes_the_reference_load(self):
+        # Indirect control follows the equilibrium path by arc length instead of
+        # stopping at the reference load level, which is what makes it useful
+        # for limit points.
+        with tempfile.TemporaryDirectory() as directory:
+            result, _output = self._run_nonlinear_static(
+                {
+                    "nsteps": 6,
+                    "controlmode": 0,
+                    "stiffmode": 1,
+                    "rtolv": 1.0e-6,
+                    "maxiter": 100,
+                    "steplength": 0.5,
+                    "psi": 1.0,
+                },
+                directory,
+            )
+
+        load_levels = [
+            float(match)
+            for match in re.findall(
+                r"Equilibrium reached at load level\s*=\s*([+\-0-9.eE]+)",
+                result.stdout,
+            )
+        ]
+        self.assertEqual(len(load_levels), 6)
+        self.assertGreater(max(load_levels), 1.0)
 
 
 if __name__ == "__main__":

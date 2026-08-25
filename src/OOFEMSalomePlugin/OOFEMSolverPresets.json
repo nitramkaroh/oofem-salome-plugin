@@ -1,47 +1,24 @@
 {
   "solver_presets": [
     {
-      "id": "linear-static-vtk",
-      "display_name": "Linear static + VTK",
-      "description": "One-step linear structural solve with displacement and stress VTK output.",
-      "engng_model": "StaticStructural",
-      "nsteps": 1,
+      "id": "vtk",
+      "display_name": "VTK output",
+      "description": "Displacement and stress fields written as VTK output, in addition to the standard OOFEM text output.",
       "vtk": true,
       "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1"
     },
     {
-      "id": "linear-static-text",
-      "display_name": "Linear static (text only)",
-      "description": "One-step linear structural solve producing only the standard OOFEM output.",
-      "engng_model": "StaticStructural",
-      "nsteps": 1,
+      "id": "text-only",
+      "display_name": "Text output only",
+      "description": "Only the standard OOFEM text output; no VTK file is written.",
       "vtk": false
     },
     {
-      "id": "large-strain-static-vtk",
-      "display_name": "Large-strain static + VTK (nlgeo)",
-      "description": "Geometrically nonlinear structural solve (element nlgeo flag set) for hyperelastic or large-displacement materials, with displacement and stress VTK output.",
-      "engng_model": "StaticStructural",
-      "nsteps": 10,
+      "id": "contact-vtk",
+      "display_name": "VTK output with contact fields",
+      "description": "Displacement and stress fields plus the contact gap, pressure, and status fields, written as VTK output. Used automatically once a contact is present.",
       "vtk": true,
-      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
-      "nlgeom": true
-    },
-    {
-      "id": "contact-static-vtk",
-      "display_name": "Penalty contact + VTK",
-      "description": "Nonlinear penalty contact for the current OOFEM contact implementation, including 2D/3D carriers and gap, pressure, and status fields; continuum nlgeo remains an independent element option.",
-      "engng_model": "StaticStructural",
-      "nsteps": 10,
-      "vtk": true,
-      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 4 1 150 151 152",
-      "rtolv": 1e-9,
-      "maxiter": 100,
-      "manrmsteps": 1,
-      "initialguess": 1,
-      "smtype": 0,
-      "stiffmode": 0,
-      "renumber": 0
+      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 4 1 150 151 152"
     }
   ]
 }

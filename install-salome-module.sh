@@ -88,7 +88,11 @@ if [ ! -e "$salome_app_backup" ]; then
     cp -- "$salome_app_xml" "$salome_app_backup"
 fi
 
-updated_salome_app=$(mktemp "${TMPDIR:-/tmp}/oofem-SalomeApp.XXXXXX")
+# Built in the SAME directory as the target so the replace below is a
+# same-filesystem rename (atomic on POSIX), never a truncate-in-place
+# `cp`: a kill or power-loss mid-write must not leave SALOME's shared,
+# multi-module SalomeApp.xml half-written for every module, not just OOFEM.
+updated_salome_app=$(mktemp "$(dirname -- "$salome_app_xml")/.oofem-SalomeApp.XXXXXX")
 cleanup() {
     rm -f -- "$updated_salome_app"
 }
@@ -104,7 +108,11 @@ awk -v start="$integration_start" -v end="$integration_end" -v block="$integrati
 ' "$salome_app_xml" > "$updated_salome_app"
 
 if ! cmp -s -- "$salome_app_xml" "$updated_salome_app"; then
-    cp -- "$updated_salome_app" "$salome_app_xml"
+    # mktemp's file starts as 600; adopt the target's existing mode before
+    # the rename replaces its inode, or other SALOME users on a shared
+    # install could lose read access to their own resource file.
+    chmod --reference="$salome_app_xml" "$updated_salome_app"
+    mv -- "$updated_salome_app" "$salome_app_xml"
 fi
 
 fi

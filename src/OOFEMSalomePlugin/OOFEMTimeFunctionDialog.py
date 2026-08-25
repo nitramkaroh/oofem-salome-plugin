@@ -1,29 +1,10 @@
 """Dialog for creating and editing OOFEM time functions."""
 
+from OOFEMSalomePlugin.OOFEMParameterCoercion import (
+    coerce_parameter_value as _coerce_parameter,
+    format_parameter_value as _format_parameter,
+)
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
-
-
-def _format_parameter(value, parameter_type):
-    if value is None:
-        return ""
-    if parameter_type == "float_list" and isinstance(value, (list, tuple)):
-        return ", ".join(str(item) for item in value)
-    return str(value)
-
-
-def _coerce_parameter(text, parameter_type):
-    if parameter_type == "float":
-        return float(text)
-    if parameter_type == "int":
-        return int(text)
-    if parameter_type == "string":
-        return str(text)
-    if parameter_type == "float_list":
-        parts = [part.strip() for part in text.split(",")]
-        if not parts or any(not part for part in parts):
-            raise ValueError("expected comma-separated numbers")
-        return [float(part) for part in parts]
-    raise ValueError("unsupported parameter type '{}'".format(parameter_type))
 
 
 class OOFEMTimeFunctionDialog(QtWidgets.QDialog):

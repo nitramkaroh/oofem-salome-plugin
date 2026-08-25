@@ -4,6 +4,10 @@ import traceback
 
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtCore, QtWidgets
 from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
+from OOFEMSalomePlugin.OOFEMParameterCoercion import (
+    coerce_parameter_value,
+    format_parameter_value,
+)
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
 from OOFEMSalomePlugin.OOFEMContactDialog import OOFEMContactDialog
@@ -16,6 +20,17 @@ from OOFEMSalomePlugin.OOFEMProject import (
 
 
 _Signal = getattr(QtCore, "pyqtSignal", None) or QtCore.Signal
+
+# Bounds for the live solver-output view/buffer: a crash-looping or
+# diverging solver run must not be able to grow either without limit and
+# exhaust the SALOME GUI process's memory before the configured run timeout
+# is ever reached.
+MAX_SOLVER_LOG_BLOCK_COUNT = 20000
+MAX_SOLVER_OUTPUT_BUFFER_BYTES = 16 * 1024 * 1024
+_SOLVER_OUTPUT_TRUNCATION_NOTICE = (
+    "\n[... earlier solver output truncated by the OOFEM plugin to bound "
+    "memory use ...]\n"
+)
 
 
 class OOFEMMainWidget(QtWidgets.QWidget):
@@ -124,6 +139,25 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         time_layout.addWidget(self.timeFunctionTable)
         analysis_layout.addWidget(time_group)
         self.tabs.addTab(analysis_tab, "Analysis")
+
+        # Tab: which fields (if any) OOFEM writes as VTK output. Everything
+        # about the solver itself (engineering model, iteration controls)
+        # lives on the Analysis tab; nlgeo lives on the Cross Sections tab.
+        post_tab = QtWidgets.QWidget()
+        post_layout = QtWidgets.QVBoxLayout(post_tab)
+        output_form = QtWidgets.QFormLayout()
+        self.outputFormCombo = QtWidgets.QComboBox()
+        self.outputFormCombo.currentIndexChanged.connect(self._solverSettingsChanged)
+        output_form.addRow("Output:", self.outputFormCombo)
+        post_layout.addLayout(output_form)
+        post_note = QtWidgets.QLabel(
+            "Choose whether OOFEM writes VTK output alongside the standard "
+            "text output, and which fields it contains."
+        )
+        post_note.setWordWrap(True)
+        post_layout.addWidget(post_note)
+        post_layout.addStretch()
+
         # Tab 1: Element Mapping
         elem_tab = QtWidgets.QWidget()
         elem_layout = QtWidgets.QVBoxLayout(elem_tab)
@@ -133,6 +167,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.elemTable.cellChanged.connect(self.onElementMappingChanged)
         elem_layout.addWidget(self.elemTable)
         self.tabs.addTab(elem_tab, "Element Mapping")
+        self.tabs.addTab(post_tab, "Export")
 
         # Tab 2: Materials
         mat_tab = QtWidgets.QWidget()
@@ -325,9 +360,6 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         export_tab = QtWidgets.QWidget()
         export_layout = QtWidgets.QVBoxLayout(export_tab)
         export_form = QtWidgets.QFormLayout()
-        self.solverPresetCombo = QtWidgets.QComboBox()
-        self.solverPresetCombo.currentIndexChanged.connect(self._solverSettingsChanged)
-        export_form.addRow("Solver preset:", self.solverPresetCombo)
 
         executable_layout = QtWidgets.QHBoxLayout()
         self.oofemExecutableEdit = QtWidgets.QLineEdit()
@@ -386,12 +418,12 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         export_layout.addWidget(QtWidgets.QLabel("Solver output:"))
         self.solverLog = QtWidgets.QPlainTextEdit()
         self.solverLog.setReadOnly(True)
+        # Bound the widget's own retained text: a crash-looping/diverging
+        # solver that keeps producing output must not grow this without
+        # limit and exhaust the SALOME GUI process's memory.
+        self.solverLog.setMaximumBlockCount(MAX_SOLVER_LOG_BLOCK_COUNT)
         export_layout.addWidget(self.solverLog)
-        self.tabs.addTab(export_tab, "Export / Solve")
 
-        # Tab 5: discover and open native OOFEM VTK output.
-        post_tab = QtWidgets.QWidget()
-        post_layout = QtWidgets.QVBoxLayout(post_tab)
         history_group = QtWidgets.QGroupBox("Run History")
         history_layout = QtWidgets.QVBoxLayout(history_group)
         history_select = QtWidgets.QHBoxLayout()
@@ -422,11 +454,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.runSummaryLabel = QtWidgets.QLabel("No recorded run selected.")
         self.runSummaryLabel.setWordWrap(True)
         history_layout.addWidget(self.runSummaryLabel)
-        post_layout.addWidget(history_group)
+        export_layout.addWidget(history_group)
 
-        post_layout.addWidget(QtWidgets.QLabel("Run files and results:"))
+        export_layout.addWidget(QtWidgets.QLabel("Run files and results:"))
         self.resultList = QtWidgets.QListWidget()
-        post_layout.addWidget(self.resultList)
+        export_layout.addWidget(self.resultList)
         post_buttons = QtWidgets.QHBoxLayout()
         self.refreshResultsBtn = QtWidgets.QPushButton("Refresh Results")
         self.refreshResultsBtn.clicked.connect(self.refreshResults)
@@ -437,14 +469,15 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.convertMedBtn = QtWidgets.QPushButton("Convert VTK to MED…")
         self.convertMedBtn.clicked.connect(self.convertSelectedResult)
         post_buttons.addWidget(self.convertMedBtn)
-        post_layout.addLayout(post_buttons)
+        export_layout.addLayout(post_buttons)
         post_note = QtWidgets.QLabel(
             "OOFEM writes VTK/PVD natively. MED conversion uses the optional "
             "meshio package bundled with or installed into SALOME's Python."
         )
         post_note.setWordWrap(True)
-        post_layout.addWidget(post_note)
-        self.tabs.addTab(post_tab, "Postprocess")
+        export_layout.addWidget(post_note)
+
+        self.tabs.addTab(export_tab, "Solve")
 
         # State is owned by the active SALOME study. SALOME's normal Save
         # action serializes the latest widget values; no separate commit step
@@ -463,7 +496,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.loadMaterialTemplates()
         self.loadBCTemplates()
         self.loadProjectTemplates()
-        self.loadSolverPresets()
+        self.loadOutputForms()
 
     def loadMaterialTemplates(self):
         """Load the material templates and named material library."""
@@ -520,20 +553,20 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             self.time_function_templates = []
             self._block_signals = False
 
-    def loadSolverPresets(self):
+    def loadOutputForms(self):
         try:
             from OOFEMSalomePlugin.OOFEMConfig import load_solver_presets
 
             self.solver_presets = load_solver_presets()
-            self.solverPresetCombo.clear()
+            self.outputFormCombo.clear()
             for preset in self.solver_presets:
-                self.solverPresetCombo.addItem(
+                self.outputFormCombo.addItem(
                     preset.get("display_name", preset["id"]), preset["id"]
                 )
                 description = preset.get("description")
                 if description:
-                    self.solverPresetCombo.setItemData(
-                        self.solverPresetCombo.count() - 1,
+                    self.outputFormCombo.setItemData(
+                        self.outputFormCombo.count() - 1,
                         description,
                         Qt.ToolTipRole,
                     )
@@ -639,8 +672,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.state.setdefault("run_history_root", "")
         self.state.setdefault(
             "solver_preset",
-            self.solverPresetCombo.itemData(0)
-            if self.solverPresetCombo.count()
+            self.outputFormCombo.itemData(0)
+            if self.outputFormCombo.count()
             else None,
         )
         if not self.state.get("oofem_executable"):
@@ -660,9 +693,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateContacts()
         self.oofemExecutableEdit.setText(self.state["oofem_executable"])
         self.inputFileEdit.setText(self.state["last_input_file"])
-        preset_index = self.solverPresetCombo.findData(self.state["solver_preset"])
+        preset_index = self.outputFormCombo.findData(self.state["solver_preset"])
         if preset_index >= 0:
-            self.solverPresetCombo.setCurrentIndex(preset_index)
+            self.outputFormCombo.setCurrentIndex(preset_index)
         self._ensureContactSolverSetup()
         self.last_export_file = self.state["last_input_file"]
         self.refreshRunHistory()
@@ -813,29 +846,11 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
     @staticmethod
     def _formatParameterValue(value, parameter_type):
-        if value is None:
-            return ""
-        if parameter_type in ("int_list", "float_list") and isinstance(
-            value, (list, tuple)
-        ):
-            return ", ".join(str(item) for item in value)
-        return str(value)
+        return format_parameter_value(value, parameter_type)
 
     @staticmethod
     def _coerceParameterValue(text, parameter_type):
-        if parameter_type == "float":
-            return float(text)
-        if parameter_type == "int":
-            return int(text)
-        if parameter_type == "string":
-            return str(text)
-        if parameter_type in ("int_list", "float_list"):
-            parts = [part.strip() for part in text.split(",")]
-            if not parts or any(not part for part in parts):
-                raise ValueError("expected comma-separated numbers")
-            converter = int if parameter_type == "int_list" else float
-            return [converter(part) for part in parts]
-        raise ValueError("unsupported type '{}'".format(parameter_type))
+        return coerce_parameter_value(text, parameter_type)
 
     def populateAnalysis(self):
         analysis = self.state.get("analysis") or {}
@@ -890,6 +905,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)
+            self._rememberPropertyCellText(value_item)
             self.analysisPropsTable.setItem(row, 0, name_item)
             self.analysisPropsTable.setItem(row, 1, value_item)
         self._block_signals = False
@@ -927,17 +943,17 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             "params", {}
         )
         if optional and not text:
+            self._rememberPropertyCellText(value_item)
             if key in parameters:
                 del parameters[key]
                 self._notifyProjectChanged()
             return
         try:
             value = self._coerceParameterValue(text, parameter_type)
-        except (TypeError, ValueError) as error:
-            self.statusLabel.setText(
-                "Invalid analysis parameter '{}': {}".format(key, error)
-            )
+        except (TypeError, ValueError):
+            self._rejectPropertyEdit(value_item, key, text, parameter_type)
             return
+        self._rememberPropertyCellText(value_item)
         if parameters.get(key) != value:
             parameters[key] = value
             self._notifyProjectChanged()
@@ -1171,8 +1187,43 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if data and self._crossSectionAssignmentAvailable(data):
             data["id"] = str(uuid.uuid4())
             self.state["cross_sections"].append(data)
+            self._syncMaterialGroupFromCrossSection(data)
             self.populateCrossSections()
+            self.populateMaterials()
             self._notifyProjectChanged()
+
+    def _materialForCrossSection(self, cross_section):
+        material_id = cross_section.get("material_id")
+        return next(
+            (
+                material
+                for material in self.state.get("materials", [])
+                if material.get("id") == material_id
+            ),
+            None,
+        )
+
+    def _syncMaterialGroupFromCrossSection(self, cross_section):
+        """Keep material['assigned_group'] from going stale.
+
+        It only has one unambiguous meaning -- the group of the single
+        cross section a legacy/simple material was auto-created for. Once
+        that cross section is retargeted, re-sync it there too, so the
+        Materials tab and the exporter's cross_sections=None legacy
+        fallback (used once no cross section is left at all) never see a
+        group the user moved away from.
+        """
+        material = self._materialForCrossSection(cross_section)
+        if material is None:
+            return
+        material_id = material.get("id")
+        sibling_count = sum(
+            1
+            for other in self.state.get("cross_sections", [])
+            if other.get("material_id") == material_id
+        )
+        if sibling_count == 1:
+            material["assigned_group"] = cross_section.get("assigned_group")
 
     def editCrossSection(self, *unused):
         existing = self._selectedCrossSection()
@@ -1190,7 +1241,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             merged["id"] = existing.get("id")
             existing.clear()
             existing.update(merged)
+            self._syncMaterialGroupFromCrossSection(existing)
             self.populateCrossSections()
+            self.populateMaterials()
             self._notifyProjectChanged()
 
     def removeCrossSection(self):
@@ -1201,12 +1254,23 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             )
             return
         cross_section_id = existing.get("id")
+        material = self._materialForCrossSection(existing)
         self.state["cross_sections"] = [
             cross_section
             for cross_section in self.state["cross_sections"]
             if cross_section.get("id") != cross_section_id
         ]
+        if material is not None and not any(
+            cross_section.get("material_id") == material.get("id")
+            for cross_section in self.state["cross_sections"]
+        ):
+            # No cross section references this material any more: clear its
+            # (now-unowned) assigned_group instead of leaving a value that
+            # would silently reactivate the legacy per-material export
+            # fallback under a group the user may have moved away from.
+            material["assigned_group"] = None
         self.populateCrossSections()
+        self.populateMaterials()
         self._notifyProjectChanged()
 
     @staticmethod
@@ -1307,9 +1371,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)
 
+            self._rememberPropertyCellText(value_item)
             self.matPropsTable.setItem(row, 0, name_item)
             self.matPropsTable.setItem(row, 1, value_item)
-        
+
         self._block_signals = False
 
     def addMaterial(self):
@@ -1457,9 +1522,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)
 
+            self._rememberPropertyCellText(value_item)
             self.bcPropsTable.setItem(row, 0, name_item)
             self.bcPropsTable.setItem(row, 1, value_item)
-        
+
         self._block_signals = False
 
     def _selectedBC(self):
@@ -1657,50 +1723,53 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 item.setData(Qt.UserRole, contact.get("id"))
                 self.contactTable.setItem(row, column, item)
 
+    # Numeric controls a converging penalty contact solve needs. Contact
+    # requires StaticStructural (only that analysis emits initialguess and
+    # smtype), so these seed the Analysis tab's params -- once, the first
+    # time a contact is added or nsteps still looks unconfigured -- and are
+    # otherwise left alone so later edits, including clearing a field, stick.
+    _CONTACT_ANALYSIS_NSTEPS = 10
+    _CONTACT_ANALYSIS_PARAMS = {
+        "rtolv": 1e-9,
+        "renumber": 0,
+        "stiffmode": 0,
+        "manrmsteps": 1,
+        "maxiter": 100,
+        "initialguess": 1,
+        "smtype": 0,
+    }
+
     def _ensureContactSolverSetup(self, reset_steps=False):
-        """Apply the one supported current-OOFEM contact solver setup."""
+        """Keep the Analysis tab on the one supported contact configuration."""
         has_contacts = bool(self.state.get("contacts", []))
-        self.solverPresetCombo.setEnabled(not has_contacts)
         self.analysisCombo.setEnabled(not has_contacts)
         if not has_contacts:
             return
-
-        from OOFEMSalomePlugin.OOFEMConfig import solver_settings
-
-        # Contact uses its own nonlinear iteration/output preset but must not
-        # change continuum kinematics. Materialize an inherited large-strain
-        # default before switching presets; explicit on/off values are kept.
-        materialized_nlgeo = False
-        if solver_settings(
-            self.solverPresetCombo.currentData()
-        ).get("nlgeom") is True:
-            for cross_section in self.state.get("cross_sections", []):
-                if not isinstance(cross_section, dict):
-                    continue
-                element_options = cross_section.get("element_options")
-                if element_options is None:
-                    element_options = {}
-                    cross_section["element_options"] = element_options
-                if not isinstance(element_options, dict):
-                    continue
-                mode = str(
-                    element_options.get("nlgeo", "inherit")
-                ).strip().casefold()
-                if mode == "inherit":
-                    element_options["nlgeo"] = "on"
-                    materialized_nlgeo = True
 
         static_analysis = self.analysisCombo.findData("staticstructural")
         if (
             static_analysis >= 0
             and self.analysisCombo.currentIndex() != static_analysis
         ):
-            self.analysisCombo.setCurrentIndex(static_analysis)
-        contact_preset = self.solverPresetCombo.findData("contact-static-vtk")
-        if contact_preset >= 0:
-            self.solverPresetCombo.setCurrentIndex(contact_preset)
+            # Switching the combo would normally run onAnalysisChanged and
+            # replace state["analysis"] wholesale with template defaults;
+            # block that so a contact model never silently loses the user's
+            # existing analysis params, and keep them explicitly instead.
+            self._block_signals = True
+            try:
+                self.analysisCombo.setCurrentIndex(static_analysis)
+            finally:
+                self._block_signals = False
+            self.state["analysis"] = {
+                "id": (self.state.get("analysis") or {}).get(
+                    "id", "analysis-{}".format(uuid.uuid4())
+                ),
+                "oofem_type": "staticstructural",
+                "params": dict(
+                    (self.state.get("analysis") or {}).get("params") or {}
+                ),
+            }
 
-        preset_steps = solver_settings("contact-static-vtk").get("nsteps", 10)
         analysis_params = self.state.setdefault("analysis", {}).setdefault(
             "params", {}
         )
@@ -1709,10 +1778,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         except (TypeError, ValueError):
             current_steps = 1
         if reset_steps or current_steps <= 1:
-            analysis_params["nsteps"] = int(preset_steps)
-            self.populateAnalysisDetails()
-        if materialized_nlgeo:
-            self.populateCrossSections()
+            analysis_params["nsteps"] = self._CONTACT_ANALYSIS_NSTEPS
+            for key, value in self._CONTACT_ANALYSIS_PARAMS.items():
+                analysis_params.setdefault(key, value)
+        self.populateAnalysisDetails()
 
     def _selectedContact(self):
         selected = self.contactTable.selectedItems()
@@ -1737,7 +1806,15 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         )
         if data:
             data["id"] = "contact-{}".format(uuid.uuid4())
+            first_contact = not self.state.get("contacts")
             self.state.setdefault("contacts", []).append(data)
+            if first_contact:
+                # Steer the output form to the contact-fields record once,
+                # when contact first appears; the combo stays enabled so the
+                # user can still choose text-only or a different VTK record.
+                contact_output = self.outputFormCombo.findData("contact-vtk")
+                if contact_output >= 0:
+                    self.outputFormCombo.setCurrentIndex(contact_output)
             self._ensureContactSolverSetup(reset_steps=True)
             self.populateContacts()
             self._notifyProjectChanged()
@@ -1782,6 +1859,39 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.populateContacts()
         self._notifyProjectChanged()
 
+    # Remembers each value cell's own last-displayed (valid) text, so a
+    # rejected edit can be reverted exactly -- including when the display
+    # came from a legacy scalar alias (dof/val) or a template default
+    # rather than literally being stored under this parameter's own key.
+    _LAST_GOOD_TEXT_ROLE = Qt.UserRole + 3
+
+    def _rememberPropertyCellText(self, value_item):
+        # setData() re-emits itemChanged in this Qt binding even for a
+        # custom role, which would otherwise re-enter the very
+        # on*PropertyChanged handler that is calling this (unlike
+        # populate*Details(), which already runs under _block_signals).
+        previously_blocked = self._block_signals
+        self._block_signals = True
+        try:
+            value_item.setData(self._LAST_GOOD_TEXT_ROLE, value_item.text())
+        finally:
+            self._block_signals = previously_blocked
+
+    def _rejectPropertyEdit(self, value_item, param_key, value_text, param_type):
+        """Revert an edited property cell and report why, instead of leaving
+        rejected text visible as if the edit had silently been applied."""
+        self.statusLabel.setText(
+            "Invalid value '{}' for parameter '{}' (expected type: {}). "
+            "Change not saved.".format(value_text, param_key, param_type)
+        )
+        self._block_signals = True
+        try:
+            value_item.setText(
+                value_item.data(self._LAST_GOOD_TEXT_ROLE) or ""
+            )
+        finally:
+            self._block_signals = False
+
     def onBCPropertyChanged(self, row, column):
         """Updates the state when a BC property value is changed."""
         if self._block_signals or column != 1:
@@ -1797,11 +1907,12 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         key_item = self.bcPropsTable.item(row, 0)
         value_item = self.bcPropsTable.item(row, 1)
         param_key = key_item.data(Qt.UserRole)
-        param_type = key_item.data(Qt.UserRole + 1)
+        param_type = key_item.data(Qt.UserRole + 1) or "float"
         is_optional = key_item.data(Qt.UserRole + 2)
         value_text = value_item.text().strip()
 
         if is_optional and not value_text:
+            self._rememberPropertyCellText(value_item)
             if param_key in bc_data['params']:
                 del bc_data['params'][param_key]
                 self._notifyProjectChanged()
@@ -1810,11 +1921,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         try:
             new_value = self._coerceParameterValue(value_text, param_type)
         except (TypeError, ValueError):
-            print(
-                "Invalid value '{}' for parameter '{}' (expected type: {}). "
-                "Change not saved.".format(value_text, param_key, param_type)
-            )
+            self._rejectPropertyEdit(value_item, param_key, value_text, param_type)
             return
+        self._rememberPropertyCellText(value_item)
         bc_data["params"][param_key] = new_value
         # Keep scalar aliases editable for an unmigrated in-memory record.
         if param_key == "dofs" and "dof" in bc_data["params"]:
@@ -1843,35 +1952,27 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         key_item = self.matPropsTable.item(row, 0)
         value_item = self.matPropsTable.item(row, 1)
         param_key = key_item.data(Qt.UserRole)
-        
-        param_type = key_item.data(Qt.UserRole + 1) # Retrieve the stored type
+
+        param_type = key_item.data(Qt.UserRole + 1) or "float"  # Retrieve the stored type
         is_optional = key_item.data(Qt.UserRole + 2)
-        
+
         value_text = value_item.text().strip()
 
         # If the parameter is optional and the user cleared the value, remove it from the state
         if is_optional and not value_text:
+            self._rememberPropertyCellText(value_item)
             if param_key in mat_data['params']:
                 del mat_data['params'][param_key]
                 self._notifyProjectChanged()
                 print(f"INFO: Optional parameter '{param_key}' was removed.")
             return
 
-        new_value = None
         try:
-            if param_type == 'float':
-                new_value = float(value_text)
-            elif param_type == 'int':
-                new_value = int(value_text)
-            elif param_type == 'string':
-                new_value = str(value_text)
-            # Future types like 'bool' or choice lists can be added here.
-            else:
-                # Default to string if type is unknown or not specified
-                new_value = str(value_text)
-        except ValueError:
-            print(f"Invalid value '{value_text}' for parameter '{param_key}' (expected type: {param_type}). Change not saved.")
+            new_value = self._coerceParameterValue(value_text, param_type)
+        except (TypeError, ValueError):
+            self._rejectPropertyEdit(value_item, param_key, value_text, param_type)
             return
+        self._rememberPropertyCellText(value_item)
         mat_data['params'][param_key] = new_value
         self._notifyProjectChanged()
 
@@ -1925,7 +2026,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         if not isinstance(self.state, dict):
             return False
         values = {
-            "solver_preset": self.solverPresetCombo.currentData(),
+            "solver_preset": self.outputFormCombo.currentData(),
             "oofem_executable": self.oofemExecutableEdit.text().strip(),
             "last_input_file": self.inputFileEdit.text().strip(),
         }
@@ -1938,7 +2039,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     def _selectedSolverSettings(self, output_directory=None):
         from OOFEMSalomePlugin.OOFEMConfig import solver_settings
 
-        settings = solver_settings(self.solverPresetCombo.currentData())
+        settings = solver_settings(self.outputFormCombo.currentData())
         results_directory = output_directory
         if results_directory is None:
             results_directory = os.environ.get(
@@ -2452,7 +2553,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 self,
                 "Mark Interrupted OOFEM Run",
                 "This run is still active in the current OOFEM process. "
-                "Cancel it from Export / Solve or wait for it to finish.",
+                "Cancel it from Solve or wait for it to finish.",
             )
             return False
 
@@ -2609,24 +2710,33 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                     solver_command=command,
                     solver_version=solver_version,
                 )
-                result = self._exportModel(
-                    filename=handle.input_file,
-                    solver_settings=self._selectedSolverSettings(
-                        output_directory=handle.results_directory
-                    ),
-                    recorded_run=True,
-                )
-                if not result:
-                    manager.mark_failed(
-                        handle.run_id, message="OOFEM input export was cancelled."
+                # Hold the run's lock across export+registration: the
+                # exporter writes handle.input_file directly to disk with
+                # no manager-level mutation in between, so without this a
+                # concurrent delete_run()/mark_failed() from another
+                # widget/session sharing the same run-history root would
+                # only see status='pending' and could delete or freeze the
+                # directory while the export is still in progress.
+                with manager.held_reservation(handle.run_id):
+                    result = self._exportModel(
+                        filename=handle.input_file,
+                        solver_settings=self._selectedSolverSettings(
+                            output_directory=handle.results_directory
+                        ),
+                        recorded_run=True,
                     )
-                    self.refreshRunHistory(preferred_run_id=handle.run_id)
-                    return
-                registered = manager.register_input(
-                    handle.run_id, result["input_file"]
-                )
-                if registered is not None:
-                    handle = registered
+                    if not result:
+                        manager.mark_failed(
+                            handle.run_id,
+                            message="OOFEM input export was cancelled.",
+                        )
+                        self.refreshRunHistory(preferred_run_id=handle.run_id)
+                        return
+                    registered = manager.register_input(
+                        handle.run_id, result["input_file"]
+                    )
+                    if registered is not None:
+                        handle = registered
 
             self._active_run = handle
             self._active_run_manager = manager
@@ -2773,6 +2883,15 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         )
         if data:
             self._solver_output_buffer += data
+            if len(self._solver_output_buffer) > MAX_SOLVER_OUTPUT_BUFFER_BYTES:
+                keep_from = (
+                    len(self._solver_output_buffer)
+                    - MAX_SOLVER_OUTPUT_BUFFER_BYTES
+                )
+                self._solver_output_buffer = (
+                    _SOLVER_OUTPUT_TRUNCATION_NOTICE
+                    + self._solver_output_buffer[keep_from:]
+                )
             self.solverLog.moveCursor(self.solverLog.textCursor().End)
             self.solverLog.insertPlainText(data)
             self.solverLog.moveCursor(self.solverLog.textCursor().End)
@@ -2899,7 +3018,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             if run_recorded:
                 self.statusLabel.setText("OOFEM solve completed successfully.")
                 self.exportSummaryLabel.setText(
-                    "Solve complete. Open the Postprocess tab to inspect results."
+                    "Solve complete. Open the Export tab to inspect results."
                 )
             else:
                 self.statusLabel.setText(
@@ -2946,7 +3065,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 self.openSelectedResult()
 
     # ---------------------------
-    # Postprocess
+    # Run history / results
     # ---------------------------
     def refreshResults(self, run_summary=None):
         current = self.resultList.currentItem()
@@ -3043,7 +3162,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 "Opened {} in ParaView.".format(os.path.basename(path))
             )
         except Exception as error:
-            QtWidgets.QMessageBox.critical(self, "OOFEM Postprocess", str(error))
+            QtWidgets.QMessageBox.critical(self, "OOFEM Export", str(error))
             traceback.print_exc()
 
     @staticmethod

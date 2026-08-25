@@ -49,29 +49,19 @@ def load_solver_presets():
 
 
 def solver_settings(preset_id=None):
+    """Resolve an output-form entry (VTK on/off + record) by id.
+
+    The engineering model and its numeric solution controls live on the
+    Analysis tab now; this only ever carries output-form (concern c) keys.
+    """
     presets = load_solver_presets()
     selected = next(
         (preset for preset in presets if preset.get("id") == preset_id), presets[0]
     )
-    settings = {
-        "engng_model": selected.get("engng_model", "StaticStructural"),
-        "nsteps": int(selected.get("nsteps", 1)),
+    return {
         "vtk": bool(selected.get("vtk", False)),
         "vtk_record": selected.get(
             "vtk_record",
             "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1",
         ),
-        "nlgeom": bool(selected.get("nlgeom", False)),
     }
-    for key in (
-        "rtolv",
-        "maxiter",
-        "manrmsteps",
-        "initialguess",
-        "smtype",
-        "stiffmode",
-        "renumber",
-    ):
-        if selected.get(key) is not None:
-            settings[key] = selected[key]
-    return settings

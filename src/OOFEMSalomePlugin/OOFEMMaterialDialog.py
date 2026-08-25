@@ -106,16 +106,28 @@ class OOFEMMaterialDialog(QtWidgets.QDialog):
         entry = self._selected_library_entry()
         if entry is None:
             return
-        type_index = next(
-            (
-                index
-                for index, template in enumerate(self.material_templates)
-                if template["oofem_name"] == entry.get("template")
-            ),
-            -1,
+        compatible = entry.get("compatible_templates", [])
+        current_type = (
+            self.material_templates[self.typeCombo.currentIndex()]["oofem_name"]
+            if 0 <= self.typeCombo.currentIndex() < len(self.material_templates)
+            else None
         )
-        if type_index >= 0:
-            self.typeCombo.setCurrentIndex(type_index)
+        if current_type not in compatible:
+            # A preset usable by more than one OOFEM material type (e.g. an
+            # isotropic elastic material is the same physical material
+            # whether it backs a 2D or a 3D element) should not force a
+            # specific one if the current selection already applies;
+            # otherwise fall back to the first type it supports.
+            type_index = next(
+                (
+                    index
+                    for index, template in enumerate(self.material_templates)
+                    if template["oofem_name"] in compatible
+                ),
+                -1,
+            )
+            if type_index >= 0:
+                self.typeCombo.setCurrentIndex(type_index)
         if not self.nameEdit.text().strip():
             self.nameEdit.setText(entry.get("display_name", ""))
 
@@ -127,7 +139,9 @@ class OOFEMMaterialDialog(QtWidgets.QDialog):
             if "default" in parameter
         }
         library_entry = self._selected_library_entry()
-        if library_entry and library_entry.get("template") == selected_template["oofem_name"]:
+        if library_entry and selected_template["oofem_name"] in library_entry.get(
+            "compatible_templates", []
+        ):
             parameters.update(library_entry.get("params", {}))
 
         override_map = None

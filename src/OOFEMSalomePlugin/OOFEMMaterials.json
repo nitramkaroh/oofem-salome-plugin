@@ -86,33 +86,15 @@
   ],
   "library": [
     {
-      "id": "steel-structural",
-      "display_name": "Structural steel (SI)",
-      "template": "ElasticIsotropic3d",
+      "id": "elasticisotropic-e210",
+      "display_name": "ElasticIsotropic (E=210 GPa, nu=0.30, rho=7850 kg/m3)",
+      "compatible_templates": ["ElasticIsotropic3d", "ElasticIsotropic2d"],
       "params": {"E": 210000000000.0, "nu": 0.3, "d": 7850.0, "alpha": 0.000012}
     },
     {
-      "id": "aluminium-6061",
-      "display_name": "Aluminium 6061 (SI)",
-      "template": "ElasticIsotropic3d",
-      "params": {"E": 68900000000.0, "nu": 0.33, "d": 2700.0, "alpha": 0.0000236}
-    },
-    {
-      "id": "concrete-elastic",
-      "display_name": "Concrete C30 elastic (SI)",
-      "template": "ElasticIsotropic3d",
-      "params": {"E": 33000000000.0, "nu": 0.2, "d": 2400.0, "alpha": 0.00001}
-    },
-    {
-      "id": "steel-plane-stress",
-      "display_name": "Structural steel, plane stress (SI)",
-      "template": "ElasticIsotropic2d",
-      "params": {"E": 210000000000.0, "nu": 0.3, "t": 0.01, "d": 7850.0, "alpha": 0.000012}
-    },
-    {
-      "id": "steel-truss",
-      "display_name": "Structural steel truss (SI)",
-      "template": "Truss",
+      "id": "truss-e210",
+      "display_name": "Truss (E=210 GPa, A=0.01 m2)",
+      "compatible_templates": ["Truss"],
       "params": {"E": 210000000000.0, "A": 0.01, "d": 7850.0, "alpha": 0.000012}
     }
   ]

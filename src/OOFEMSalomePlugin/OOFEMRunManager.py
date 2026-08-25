@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import threading
 import uuid
 
 try:  # POSIX SALOME builds
@@ -347,6 +348,8 @@ class OOFEMRunManager:
         self._locks_root.mkdir(mode=0o700, exist_ok=True)
         if not self._locks_root.is_dir():
             raise OOFEMRunError("Run-history lock path is not a directory")
+        self._lock_owners = {}
+        self._lock_owners_guard = threading.Lock()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         if result_hash_limit is None:
             result_hash_limit = DEFAULT_RESULT_HASH_LIMIT
@@ -399,8 +402,32 @@ class OOFEMRunManager:
 
     @contextmanager
     def _run_lock(self, run_id):
-        """Hold a persistent per-run OS lock until a state mutation commits."""
+        """Hold a persistent per-run OS lock until a state mutation commits.
+
+        Re-entrant per calling thread: a GUI that holds the lock across
+        reserve_run() -> export -> register_input() via held_reservation()
+        can still call locked methods (register_input, mark_running, ...)
+        for that same run_id from the same thread without deadlocking on
+        its own lock. A different thread or process for the same run_id
+        still genuinely blocks on the OS-level flock below.
+        """
         run_id = self._validate_run_id(run_id)
+        thread_id = threading.get_ident()
+        with self._lock_owners_guard:
+            owner = self._lock_owners.get(run_id)
+            if owner is not None and owner["thread"] == thread_id:
+                owner["depth"] += 1
+                reentered = True
+            else:
+                reentered = False
+        if reentered:
+            try:
+                yield
+            finally:
+                with self._lock_owners_guard:
+                    self._lock_owners[run_id]["depth"] -= 1
+            return
+
         lock_path = self._locks_root / (run_id + ".lock")
         if lock_path.is_symlink():
             raise OOFEMRunError("Run lock file must not be a symlink")
@@ -428,8 +455,12 @@ class OOFEMRunManager:
                     "No supported interprocess file-lock API is available"
                 )
             locked = True
+            with self._lock_owners_guard:
+                self._lock_owners[run_id] = {"thread": thread_id, "depth": 1}
             yield
         finally:
+            with self._lock_owners_guard:
+                self._lock_owners.pop(run_id, None)
             try:
                 if locked and _fcntl is not None:
                     _fcntl.flock(descriptor, _fcntl.LOCK_UN)
@@ -438,6 +469,18 @@ class OOFEMRunManager:
                     _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
             finally:
                 os.close(descriptor)
+
+    def held_reservation(self, run_id):
+        """Public re-entrant lock for GUI code to hold across the unlocked
+        window between reserve_run() and register_input(): the exporter
+        writes the input file directly to disk with no manager-level
+        mutation in between, so without this, a concurrent delete_run() or
+        mark_failed() on the same run_id (from another widget/session
+        sharing the same run-history root) only checks the manifest status
+        -- which is still 'pending' -- and can delete or freeze the
+        directory out from under the in-progress export.
+        """
+        return self._run_lock(run_id)
 
     @staticmethod
     def _validate_input_name(input_name):

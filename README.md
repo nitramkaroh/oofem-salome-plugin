@@ -37,7 +37,10 @@ SALOME GUI, and opens native OOFEM VTK results in SALOME's integrated ParaView
   conversion through meshio
 - Typed SALOME preferences for executable, working/results directories,
   timeout, and automatic postprocessing
-- Editable material templates plus named steel, aluminium, and concrete presets
+- Editable material templates plus a library of elastic-constant presets,
+  named by OOFEM material type and value rather than an implied real-world
+  material (an elastic preset does not imply a concrete/steel-specific
+  constitutive model, which the plugin does not claim to provide)
 - Version-3 project JSON with deterministic legacy migration, isolated per
   SALOME study and embedded in HDF through native-module callbacks
 
@@ -76,9 +79,9 @@ templates, the plugin also supports:
 The Ogden and Mooney-Rivlin hyperelastic materials require large-displacement
 kinematics. In the corresponding **Cross Section** assignment, set **Element
 nlgeo** to **Enabled** so the plugin writes `nlgeo 1` on that group's continuum
-element records. **Inherit solver preset** retains the convenient global
-default of **Large-strain static + VTK (nlgeo)**, while an explicit **Disabled**
-setting overrides it for the selected group.
+element records. There is no global default: **Inherit** means off, the same
+as an explicit **Disabled**, so hyperelastic groups need **Enabled** set
+directly on that cross section.
 
 Cross-section assignment groups must remain disjoint. To control one element
 individually, move it out of the broader assignment group and create a
@@ -193,34 +196,29 @@ The full 400-by-46 image is retained as `module/oofem-logo.png`; the module and
 fallback toolbar use a centered 48-by-48 icon derived from its first stylized
 letter so it remains visible at SALOME toolbar size.
 
-## Install as a Tools plugin (fallback)
+## Install as a Tools plugin (legacy, opt-in)
 
-The Tools plugin is retained for development and diagnostics. Use the native
-module above for SALOME HDF save/open persistence and normal production work.
+Use the native module above. This legacy path is **not installed by default**
+and is kept only for a SALOME where the native module will not load: it
+installs a *second copy* of the package into SALOME's per-user plugin
+directory, which `salome_pluginsmanager` puts first on `sys.path` and which
+can therefore shadow the native module's own (newer) copy. It also gets no
+module lifecycle, so SALOME never routes HDF `saveFiles`/`openFiles`
+persistence to it.
 
-
-The installers use SALOME's per-user plugin directory, so administrator access
-and changes to the SALOME installation are not required.
-
-### Linux
-
-~~~bash
-git clone https://github.com/oofem/oofem-salome-plugin.git
-cd oofem-salome-plugin
-./install.sh
-~~~
-
-The default destination is:
-
-~~~text
-${XDG_CONFIG_HOME:-$HOME/.config}/salome/Plugins
-~~~
-
-A custom plugin directory can be supplied with:
+`install.sh` requires an explicit flag so the entry can never appear by
+accident, and can remove it again:
 
 ~~~bash
-./install.sh --target /path/to/salome/plugins
+./install.sh --uninstall                      # remove Tools > Plugins > OOFEM
+./install.sh --legacy-tools-plugin            # install it anyway
+./install.sh --legacy-tools-plugin --target /path/to/salome/plugins
 ~~~
+
+The default destination is `${XDG_CONFIG_HOME:-$HOME/.config}/salome/Plugins`.
+Both install and uninstall are idempotent, and both preserve any other
+plugin's registration in a shared `salome_plugins.py` — only OOFEM's own
+marked block is added or removed.
 
 ### Windows
 
@@ -237,9 +235,8 @@ location can be supplied with:
 .\install.ps1 -TargetDir C:\path\to\salome\plugins
 ~~~
 
-Both plugin installers preserve an existing salome_plugins.py and add the
-OOFEM registration block idempotently. Restart SALOME, then open
-**Tools > Plugins > OOFEM**.
+`install.ps1` still installs the legacy entry unconditionally and has no
+automated test coverage; prefer the native module on Windows too.
 
 For development without installation, start SALOME with the checkout on its
 plugin path:
@@ -253,8 +250,8 @@ export SALOME_PLUGINS_PATH="$PWD${SALOME_PLUGINS_PATH:+:$SALOME_PLUGINS_PATH}"
 1. Create or import a SMESH mesh.
 2. Create groups for each material region, constrained/loaded nodes, and any
    loaded boundary edges or faces.
-3. Select the **OOFEM** module, or open **Tools > Plugins > OOFEM** when using
-   the fallback plugin installation, and select the mesh.
+3. Select the **OOFEM** module in SALOME's module selector (or, with the legacy
+   opt-in installation, **Tools > Plugins > OOFEM**), and select the mesh.
 4. Check the element mapping and choose the engineering model in **Analysis**.
 5. Add materials. Creating a legacy-style material assignment also creates a
    compatible `SimpleCS`; review or edit it in **Cross Sections**.
@@ -267,16 +264,18 @@ export SALOME_PLUGINS_PATH="$PWD${SALOME_PLUGINS_PATH:+:$SALOME_PLUGINS_PATH}"
    for a supported transient engineering model and are rejected for the
    currently available static/eigenvalue analyses.
 8. For contact, create two exterior edge groups in 2D or face groups in 3D,
-   then add a pair in **Contacts**. The plugin selects the nonlinear contact
-   preset automatically; start frictionless and review master/slave direction.
+   then add a pair in **Contacts**. The plugin switches **Analysis** to
+   Static Structural with its contact solution controls and steers **Export**
+   to the contact VTK fields automatically; start frictionless and review
+   master/slave direction.
 9. Configure the executable and run preferences in **File > Preferences >
-   OOFEM**. Choose an input path in **Export / Solve** if desired.
+   OOFEM**. Choose an input path in **Solve** if desired.
 10. Click **Validate**, then **Generate & Run**. Each solve receives a new
    timestamped run directory and can be cancelled without freezing SALOME.
 11. Save the SALOME study with **File > Save** or **Ctrl+S**. Each open study
     retains an independent OOFEM project state; no plugin-specific commit is
     needed.
-12. In **Postprocess**, select any recorded run, inspect its status, time steps,
+12. In **Solve**, select any recorded run, inspect its status, time steps,
     and fields, then open the .pvd in ParaView. **Rerun as New** preserves the
     source run; deletion always requires confirmation. If SALOME was closed
     during a solve, use **Mark Interrupted** after confirming that the external
@@ -404,8 +403,8 @@ Then:
 5. Add one zero displacement on `roller` with DOFs `2, 3` and values
    `0, 0`.
 6. Add a nodal load on `loaded`, DOF `1`, component `10`.
-7. Select **Linear Static** in **Analysis** and a VTK-enabled solver preset;
-   select the OOFEM executable and an input path.
+7. Select **Linear Static** in **Analysis**; select a VTK output form in
+   **Export**; select the OOFEM executable and an input path in **Solve**.
 8. Click **Validate**. It should report 2 nodes, 1 element, 1 material,
    1 cross section, and 3 boundary conditions.
 9. Click **Generate & Run**. The process must finish with exit code zero and
@@ -413,7 +412,7 @@ Then:
 10. Use **File > Save As**, close the study, reopen its HDF file, and select
     OOFEM again. The mesh selection, model definitions, and run history must
     be restored without a plugin-specific commit action.
-11. Open the **Postprocess** tab and load the .pvd in ParaView.
+11. In the **Solve** tab's run history, open the generated .pvd in ParaView.
 
 The resulting text output should give node 2, DOF 1 displacement 0.025.
 

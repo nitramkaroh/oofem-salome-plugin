@@ -101,7 +101,7 @@ class MainWidgetV2Tests(unittest.TestCase):
 
     def test_populate_preserves_solver_paths_when_preset_signal_fires(self):
         state = new_project_state()
-        state["solver_preset"] = "contact-static-vtk"
+        state["solver_preset"] = "contact-vtk"
         state["oofem_executable"] = "/opt/oofem/bin/oofem"
         state["last_input_file"] = "/tmp/restored-model.in"
         state["contacts"] = [
@@ -129,7 +129,7 @@ class MainWidgetV2Tests(unittest.TestCase):
         self.widget.populateAll(study=self.study, state=state)
 
         self.assertEqual(
-            self.widget.solverPresetCombo.currentData(), "contact-static-vtk"
+            self.widget.outputFormCombo.currentData(), "contact-vtk"
         )
         self.assertEqual(self.widget.oofemExecutableEdit.text(), "/opt/oofem/bin/oofem")
         self.assertEqual(self.widget.inputFileEdit.text(), "/tmp/restored-model.in")
@@ -297,7 +297,7 @@ class MainWidgetV2Tests(unittest.TestCase):
             "v=0.0", self.widget.initialConditionTable.item(0, 3).text()
         )
 
-    def test_contact_tab_crud_selects_contact_solver_preset(self):
+    def test_adding_contact_forces_the_contact_output_form_and_solver_controls(self):
         self.mesh.groups.append(
             legacy_widget_tests.FakeGroup(
                 "CONTACT_EDGE", legacy_widget_tests.SMESH.EDGE, [501]
@@ -336,21 +336,32 @@ class MainWidgetV2Tests(unittest.TestCase):
             self.assertTrue(contact_id.startswith("contact-"))
             self.assertEqual(self.widget.contactTable.rowCount(), 1)
             self.assertEqual(
-                self.widget.solverPresetCombo.currentData(),
-                "contact-static-vtk",
+                self.widget.outputFormCombo.currentData(),
+                "contact-vtk",
             )
             self.assertEqual(
                 self.widget.analysisCombo.currentData(), "staticstructural"
             )
-            self.assertEqual(
-                self.widget.state["analysis"]["params"]["nsteps"], 10
-            )
+            analysis_params = self.widget.state["analysis"]["params"]
+            self.assertEqual(analysis_params["nsteps"], 10)
+            self.assertEqual(analysis_params["rtolv"], 1e-9)
+            self.assertEqual(analysis_params["maxiter"], 100)
+            self.assertEqual(analysis_params["manrmsteps"], 1)
+            self.assertEqual(analysis_params["initialguess"], 1)
+            self.assertEqual(analysis_params["smtype"], 0)
+            self.assertEqual(analysis_params["stiffmode"], 0)
+            self.assertEqual(analysis_params["renumber"], 0)
+            self.assertNotIn("nlgeom", analysis_params)
             settings = self.widget._selectedSolverSettings()
             self.assertTrue(settings["vtk"])
-            self.assertFalse(settings["nlgeom"])
+            self.assertNotIn("nlgeom", settings)
             for field_id in ("150", "151", "152"):
                 self.assertIn(field_id, settings["vtk_record"])
-            self.assertFalse(self.widget.solverPresetCombo.isEnabled())
+            # Output form is orthogonal to contact now: the combo stays
+            # enabled so the user can still pick text-only or a plain VTK
+            # record; only the analysis (engineering-model) combo is locked,
+            # since contact requires StaticStructural.
+            self.assertTrue(self.widget.outputFormCombo.isEnabled())
             self.assertFalse(self.widget.analysisCombo.isEnabled())
 
             self.widget.contactTable.selectRow(0)
@@ -365,10 +376,13 @@ class MainWidgetV2Tests(unittest.TestCase):
         self.widget.removeContact()
         self.assertEqual(self.widget.state["contacts"], [])
         self.assertEqual(self.widget.contactTable.rowCount(), 0)
-        self.assertTrue(self.widget.solverPresetCombo.isEnabled())
+        self.assertTrue(self.widget.outputFormCombo.isEnabled())
         self.assertTrue(self.widget.analysisCombo.isEnabled())
 
-    def test_adding_contact_preserves_inherited_large_strain_nlgeo(self):
+    def test_adding_contact_does_not_change_existing_cross_section_nlgeo(self):
+        # nlgeo has no global default and no coupling to the output form or
+        # contact setup: it is set per cross section and adding a contact
+        # must leave it exactly as the user configured it.
         self.mesh.groups.append(
             legacy_widget_tests.FakeGroup(
                 "CONTACT_EDGE", legacy_widget_tests.SMESH.EDGE, [501]
@@ -382,14 +396,11 @@ class MainWidgetV2Tests(unittest.TestCase):
                 "oofem_type": "SimpleCS",
                 "material_id": "mat-rubber",
                 "assigned_group": "MAT_FACES",
-                "element_options": {"nlgeo": "inherit"},
+                "element_options": {"nlgeo": "on"},
                 "params": {"thick": 1.0},
             }
         ]
         self.widget.populateCrossSections()
-        self.widget.solverPresetCombo.setCurrentIndex(
-            self.widget.solverPresetCombo.findData("large-strain-static-vtk")
-        )
         created = {
             "name": "interface",
             "oofem_type": "StructuralPenaltyContactBC",
@@ -419,9 +430,8 @@ class MainWidgetV2Tests(unittest.TestCase):
         )
         self.assertEqual(self.widget.crossSectionTable.item(0, 4).text(), "On")
         self.assertEqual(
-            self.widget.solverPresetCombo.currentData(), "contact-static-vtk"
+            self.widget.outputFormCombo.currentData(), "contact-vtk"
         )
-        self.assertFalse(self.widget._selectedSolverSettings()["nlgeom"])
 
     def test_contact_time_function_cannot_be_removed_while_referenced(self):
         self.widget.populateAll(study=self.study)
@@ -456,15 +466,18 @@ class MainWidgetV2Tests(unittest.TestCase):
         self.assertEqual(warnings[0][1], "Time Function in Use")
         self.assertIn("contact 'interface'", warnings[0][2])
 
-    def test_loaded_contact_project_is_normalized_without_solver_choice(self):
+    def test_loaded_contact_project_normalizes_analysis_but_keeps_output_form(self):
         self.widget.populateAll(study=self.study)
         state = self.widget.state
         state["analysis"] = {
             "id": "analysis-1",
             "oofem_type": "linearstatic",
-            "params": {"nsteps": 1, "nlgeom": False},
+            "params": {"nsteps": 1},
         }
-        state["solver_preset"] = "linear-static-text"
+        # A contact requires StaticStructural and its numeric bundle, so
+        # loading normalizes the analysis; the output form is orthogonal to
+        # contact and its saved choice (here, deliberately no VTK) survives.
+        state["solver_preset"] = "text-only"
         state["contacts"] = [
             {
                 "id": "contact-loaded",
@@ -491,14 +504,16 @@ class MainWidgetV2Tests(unittest.TestCase):
             self.widget.analysisCombo.currentData(), "staticstructural"
         )
         self.assertEqual(
-            self.widget.solverPresetCombo.currentData(), "contact-static-vtk"
+            self.widget.outputFormCombo.currentData(), "text-only"
         )
-        self.assertEqual(self.widget.state["analysis"]["params"]["nsteps"], 10)
+        analysis_params = self.widget.state["analysis"]["params"]
+        self.assertEqual(analysis_params["nsteps"], 10)
+        self.assertEqual(analysis_params["rtolv"], 1e-9)
+        self.assertEqual(analysis_params["maxiter"], 100)
         settings = self.widget._selectedSolverSettings()
-        self.assertFalse(settings["nlgeom"])
-        self.assertTrue(settings["vtk"])
+        self.assertFalse(settings["vtk"])
         self.assertFalse(self.widget.analysisCombo.isEnabled())
-        self.assertFalse(self.widget.solverPresetCombo.isEnabled())
+        self.assertTrue(self.widget.outputFormCombo.isEnabled())
 
     def test_solver_check_displays_repository_provenance(self):
         self.widget.populateAll(study=self.study)
@@ -889,6 +904,76 @@ print("0 error(s)")
         self.assertFalse(process.killed)
         self.assertTrue(self.widget._solver_cancelled)
         self.assertFalse(self.widget.cancelRunBtn.isEnabled())
+
+    def test_solver_timeout_triggers_cancel(self):
+        # _solverTimedOut is the solverTimeoutTimer's connected slot; call
+        # it directly rather than waiting for the real timer, and mock out
+        # the 2s kill-escalation singleShot so this test stays fast -- that
+        # escalation itself is covered separately below.
+        self.widget.populateAll(study=self.study)
+
+        class FakeProcess:
+            def __init__(self):
+                self.terminated = False
+                self.killed = False
+
+            def state(self):
+                return QtCore.QProcess.Running
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+        process = FakeProcess()
+        self.widget.solverProcess = process
+        with unittest.mock.patch.object(
+            QtCore.QTimer, "singleShot", lambda *args, **kwargs: None
+        ):
+            self.widget._solverTimedOut()
+
+        self.assertTrue(self.widget._solver_timed_out)
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertTrue(self.widget._solver_cancelled)
+
+    def test_cancel_escalates_to_kill_if_process_ignores_terminate(self):
+        # Reproduces a solver stuck deep in a linear-solver library that
+        # ignores SIGTERM: the real 2s QTimer.singleShot escalation (not
+        # mocked here, unlike the tests above) must still kill() it.
+        self.widget.populateAll(study=self.study)
+
+        class UnresponsiveProcess:
+            def __init__(self):
+                self.terminated = False
+                self.killed = False
+
+            def state(self):
+                return QtCore.QProcess.Running
+
+            def terminate(self):
+                self.terminated = True
+                # Ignores SIGTERM: state() keeps reporting Running.
+
+            def kill(self):
+                self.killed = True
+
+        process = UnresponsiveProcess()
+        self.widget.solverProcess = process
+        self.assertTrue(self.widget.cancelSolver())
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.killed)
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not process.killed:
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.02)
+
+        self.assertTrue(
+            process.killed,
+            "the 2s kill-escalation never fired for an unresponsive process",
+        )
 
 
 if __name__ == "__main__":

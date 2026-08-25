@@ -50,8 +50,8 @@ class OOFEMProjectTests(unittest.TestCase):
         self.assertEqual(empty, {})
         self.assertEqual(migrate_project_state(None), new_project_state())
 
-    def test_version_1_and_2_migrate_to_v3_without_losing_extensions(self):
-        for source_version in (1, 2):
+    def test_version_1_2_and_3_migrate_to_v4_without_losing_extensions(self):
+        for source_version in (1, 2, 3):
             with self.subTest(source_version=source_version):
                 source = {
                     "schema_version": source_version,
@@ -197,7 +197,12 @@ class OOFEMProjectTests(unittest.TestCase):
         )
         self.assertEqual(migrated["selected_mesh_id"], legacy["selected_mesh_id"])
         self.assertEqual(migrated["element_mapping"], legacy["element_mapping"])
-        self.assertEqual(migrated["solver_preset"], legacy["solver_preset"])
+        # "large-strain-static-vtk" named an engineering model plus an
+        # implied global nlgeo default; both retired concepts are carried
+        # forward onto the Analysis tab / cross sections (see below), and
+        # the preset itself collapses to a plain output-form id.
+        self.assertEqual(migrated["solver_preset"], "vtk")
+        self.assertEqual(migrated["analysis"]["params"]["nsteps"], 10)
         self.assertEqual(
             migrated["oofem_executable"], legacy["oofem_executable"]
         )
@@ -227,9 +232,12 @@ class OOFEMProjectTests(unittest.TestCase):
         self.assertEqual(by_material["mat-solid"]["params"], {})
         self.assertEqual(by_material["mat-bar"]["assigned_group"], "BARS")
         self.assertEqual(by_material["mat-bar"]["oofem_type"], "SimpleCS")
+        # "large-strain-static-vtk" implied nlgeo on for every element left
+        # on the (retired) global default; migration materializes that onto
+        # each synthesized cross section instead of losing it.
         self.assertTrue(
             all(
-                cross_section["element_options"] == {"nlgeo": "inherit"}
+                cross_section["element_options"] == {"nlgeo": "on"}
                 for cross_section in migrated["cross_sections"]
             )
         )

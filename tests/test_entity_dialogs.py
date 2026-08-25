@@ -29,6 +29,7 @@ if QtWidgets is not None:
     from OOFEMSalomePlugin.OOFEMTimeFunctionDialog import (
         OOFEMTimeFunctionDialog,
     )
+    from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
 
     _APPLICATION = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
@@ -381,6 +382,148 @@ class EntityDialogTests(unittest.TestCase):
         unnamed.accept()
         self.assertNotEqual(unnamed.result(), QtWidgets.QDialog.Accepted)
         self.assertEqual(self.warning.call_count, len(scenarios) + 1)
+
+
+MATERIAL_TEMPLATES = [
+    {
+        "display_name": "3D Isotropic Elastic",
+        "oofem_name": "ElasticIsotropic3d",
+        "params": [
+            {"key": "E", "name": "Young's Modulus", "type": "float", "default": 1.0},
+            {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.0},
+            {"key": "d", "name": "Density", "type": "float", "default": 0.0},
+        ],
+    },
+    {
+        "display_name": "2D Isotropic Elastic (Plane Stress)",
+        "oofem_name": "ElasticIsotropic2d",
+        "params": [
+            {"key": "E", "name": "Young's Modulus", "type": "float", "default": 1.0},
+            {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.0},
+            {"key": "t", "name": "Thickness", "type": "float", "default": 1.0},
+            {"key": "d", "name": "Density", "type": "float", "default": 0.0},
+        ],
+    },
+    {
+        "display_name": "1D Truss",
+        "oofem_name": "Truss",
+        "params": [
+            {"key": "E", "name": "Young's Modulus", "type": "float", "default": 1.0},
+            {"key": "A", "name": "Area", "type": "float", "default": 1.0},
+        ],
+    },
+]
+
+MATERIAL_LIBRARY = [
+    {
+        "id": "elasticisotropic-e210",
+        "display_name": "ElasticIsotropic (E=210 GPa, nu=0.30, rho=7850 kg/m3)",
+        "compatible_templates": ["ElasticIsotropic3d", "ElasticIsotropic2d"],
+        "params": {"E": 210000000000.0, "nu": 0.3, "d": 7850.0},
+    },
+    {
+        "id": "truss-e210",
+        "display_name": "Truss (E=210 GPa, A=0.01 m2)",
+        "compatible_templates": ["Truss"],
+        "params": {"E": 210000000000.0, "A": 0.01, "d": 7850.0},
+    },
+]
+
+
+@unittest.skipUnless(
+    QtWidgets is not None,
+    "PyQt5 or PySide2 is required for entity-dialog tests: {}".format(
+        _QT_IMPORT_ERROR
+    ),
+)
+class MaterialDialogLibraryPresetTests(unittest.TestCase):
+    """A preset usable by more than one OOFEM material type is the same
+    physical material regardless of which type backs it (e.g. isotropic
+    elasticity doesn't change between a 2D and a 3D element) -- these tests
+    lock in that a single 'compatible_templates' preset applies its shared
+    params to whichever of those types is selected, without forcing one."""
+
+    def _track(self, dialog):
+        self.addCleanup(dialog.deleteLater)
+        return dialog
+
+    def _material(self):
+        return self._track(
+            OOFEMMaterialDialog(
+                MATERIAL_TEMPLATES,
+                {"elements": ["BARS", "FACES"]},
+                MATERIAL_LIBRARY,
+            )
+        )
+
+    def _select_type(self, dialog, oofem_name):
+        index = next(
+            i
+            for i, template in enumerate(MATERIAL_TEMPLATES)
+            if template["oofem_name"] == oofem_name
+        )
+        dialog.typeCombo.setCurrentIndex(index)
+
+    def _select_library(self, dialog, library_id):
+        index = dialog.libraryCombo.findData(library_id)
+        dialog.libraryCombo.setCurrentIndex(index)
+
+    def test_generic_elastic_preset_applies_under_3d_type(self):
+        dialog = self._material()
+        self._select_type(dialog, "ElasticIsotropic3d")
+        self._select_library(dialog, "elasticisotropic-e210")
+
+        data = dialog.get_data()
+        self.assertEqual(data["oofem_type"], "ElasticIsotropic3d")
+        self.assertEqual(data["params"]["E"], 210000000000.0)
+        self.assertEqual(data["params"]["nu"], 0.3)
+        self.assertEqual(data["params"]["d"], 7850.0)
+
+    def test_generic_elastic_preset_applies_under_2d_type_without_forcing_thickness(self):
+        dialog = self._material()
+        self._select_type(dialog, "ElasticIsotropic2d")
+        self._select_library(dialog, "elasticisotropic-e210")
+
+        data = dialog.get_data()
+        self.assertEqual(data["oofem_type"], "ElasticIsotropic2d")
+        self.assertEqual(data["params"]["E"], 210000000000.0)
+        self.assertEqual(data["params"]["nu"], 0.3)
+        # Thickness isn't part of "the material": the preset doesn't carry
+        # it, so the 2D template's own default is used, not silently
+        # dropped or borrowed from an unrelated dimension.
+        self.assertEqual(data["params"]["t"], 1.0)
+
+    def test_selecting_preset_does_not_override_an_already_compatible_type(self):
+        dialog = self._material()
+        self._select_type(dialog, "ElasticIsotropic2d")
+        self._select_library(dialog, "elasticisotropic-e210")
+
+        self.assertEqual(
+            MATERIAL_TEMPLATES[dialog.typeCombo.currentIndex()]["oofem_name"],
+            "ElasticIsotropic2d",
+        )
+
+    def test_selecting_preset_switches_an_incompatible_type_to_the_first_match(self):
+        dialog = self._material()
+        self._select_type(dialog, "Truss")
+        self._select_library(dialog, "elasticisotropic-e210")
+
+        self.assertEqual(
+            MATERIAL_TEMPLATES[dialog.typeCombo.currentIndex()]["oofem_name"],
+            "ElasticIsotropic3d",
+        )
+
+    def test_truss_preset_only_applies_under_truss_type(self):
+        dialog = self._material()
+        self._select_library(dialog, "truss-e210")
+        self._select_type(dialog, "ElasticIsotropic3d")
+
+        data = dialog.get_data()
+        self.assertEqual(data["oofem_type"], "ElasticIsotropic3d")
+        # The truss preset's params (E, A, d) must not leak into an
+        # unrelated, incompatible type merely because it's selected.
+        self.assertNotIn("A", data["params"])
+        self.assertNotEqual(data["params"]["E"], 210000000000.0)
 
 
 if __name__ == "__main__":

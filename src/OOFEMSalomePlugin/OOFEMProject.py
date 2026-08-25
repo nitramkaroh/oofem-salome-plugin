@@ -8,7 +8,7 @@ migration function for the flat state dictionaries used by the original GUI.
 from copy import deepcopy
 
 
-PROJECT_SCHEMA_VERSION = 3
+PROJECT_SCHEMA_VERSION = 4
 _MAX_SCHEMA_VERSION = 2**31 - 1
 
 _ANALYSIS_ID = "analysis-1"
@@ -30,7 +30,7 @@ def parse_project_schema_version(value):
 
 
 def new_project_state():
-    """Return a fresh, canonical version-3 project dictionary."""
+    """Return a fresh, canonical version-4 project dictionary."""
     return {
         "schema_version": PROJECT_SCHEMA_VERSION,
         # Kept deterministic in this pure schema layer.  The SALOME study
@@ -55,7 +55,7 @@ def new_project_state():
         "contacts": [],
         "element_mapping": {},
         "selected_mesh_id": "",
-        "solver_preset": "linear-static-vtk",
+        "solver_preset": "vtk",
         "oofem_executable": "",
         "last_input_file": "",
         "last_run_id": "",
@@ -366,14 +366,91 @@ def _migrate_materials_and_cross_sections(project):
         existing_assignments.add(assignment)
 
 
-def migrate_project_state(state):
-    """Return *state* as a canonical version-3 project without mutating it.
+# Versions 1-3 chose the engineering model and its numeric solution
+# controls via this "solver_preset" id; version 4 moved both onto the
+# Analysis tab and reduced the preset to a plain output-form choice
+# (id/vtk/vtk_record only). Carry each retired id's implied engineering
+# choices forward once, as analysis-params defaults, so a saved project
+# keeps generating the same OOFEM input after the split.
+_LEGACY_SOLVER_PRESETS = {
+    "linear-static-vtk": {"output_form": "vtk", "params": {}},
+    "linear-static-text": {"output_form": "text-only", "params": {}},
+    "large-strain-static-vtk": {
+        "output_form": "vtk",
+        "params": {"nsteps": 10},
+        "materialize_nlgeo": True,
+    },
+    "nonlinear-static-vtk": {
+        "output_form": "vtk",
+        "params": {
+            "nsteps": 10,
+            "controlmode": 1,
+            "stiffmode": 0,
+            "rtolv": 1e-6,
+            "maxiter": 100,
+        },
+    },
+    "nonlinear-static-arclength-vtk": {
+        "output_form": "vtk",
+        "params": {
+            "nsteps": 50,
+            "controlmode": 0,
+            "stiffmode": 1,
+            "rtolv": 1e-6,
+            "maxiter": 200,
+            "steplength": 1.0,
+            "psi": 1.0,
+            "reqiterations": 5,
+        },
+    },
+    "contact-static-vtk": {
+        "output_form": "contact-vtk",
+        "params": {
+            "nsteps": 10,
+            "rtolv": 1e-9,
+            "renumber": 0,
+            "stiffmode": 0,
+            "manrmsteps": 1,
+            "maxiter": 100,
+            "initialguess": 1,
+            "smtype": 0,
+        },
+    },
+}
 
-    The same additive migration accepts legacy unversioned, version-1, and
-    version-2 states.  Unknown top-level and nested extension keys are
-    retained.  ``None`` is treated as an empty project; other non-dictionary
-    values are rejected so corrupt state cannot silently become a valid,
-    unrelated project.
+
+def _migrate_legacy_solver_preset(project):
+    """Remap a retired engineering-model preset id to its output-form id.
+
+    Returns True when the retired preset also implied a global large-strain
+    default, so the caller can materialize it onto cross sections once
+    ``element_options`` has been normalized.
+    """
+    legacy = _LEGACY_SOLVER_PRESETS.get(project.get("solver_preset"))
+    if legacy is None:
+        return False
+    project["solver_preset"] = legacy["output_form"]
+    analysis = project.get("analysis")
+    if not isinstance(analysis, dict):
+        analysis = {}
+        project["analysis"] = analysis
+    analysis_params = analysis.get("params")
+    if not isinstance(analysis_params, dict):
+        analysis_params = {}
+        analysis["params"] = analysis_params
+    for key, value in legacy["params"].items():
+        analysis_params.setdefault(key, value)
+    return bool(legacy.get("materialize_nlgeo"))
+
+
+def migrate_project_state(state):
+    """Return *state* as a canonical version-4 project without mutating it.
+
+    The same additive migration accepts legacy unversioned, version-1,
+    version-2, and version-3 states.  Unknown top-level and nested extension
+    keys are retained.  ``None`` is treated as an empty project; other
+    non-dictionary values are rejected so corrupt state cannot silently
+    become a valid, unrelated project.
     """
     if state is None:
         return new_project_state()
@@ -409,11 +486,23 @@ def migrate_project_state(state):
         if key not in project:
             project[key] = deepcopy(defaults[key])
 
+    materialize_nlgeo = _migrate_legacy_solver_preset(project)
+
     _ensure_analysis(project)
     time_function_id = _ensure_time_functions(project)
     _migrate_boundary_conditions(project, time_function_id)
     _migrate_initial_conditions(project)
     _migrate_contacts(project, time_function_id)
     _migrate_materials_and_cross_sections(project)
+    if materialize_nlgeo:
+        for cross_section in project.get("cross_sections", []):
+            if not isinstance(cross_section, dict):
+                continue
+            element_options = cross_section.get("element_options")
+            if not isinstance(element_options, dict):
+                continue
+            mode = str(element_options.get("nlgeo", "inherit")).strip().casefold()
+            if mode == "inherit":
+                element_options["nlgeo"] = "on"
     project["schema_version"] = PROJECT_SCHEMA_VERSION
     return project

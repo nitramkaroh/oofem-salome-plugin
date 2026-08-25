@@ -176,4 +176,9 @@ def closeStudy():
     """Release OOFEM data belonging to the study SALOME is closing."""
     from OOFEMSalomePlugin.OOFEMModule import getModule
 
-    getModule().close_study()
+    try:
+        getModule().close_study()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()

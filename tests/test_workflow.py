@@ -11,6 +11,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from OOFEMSalomePlugin.OOFEMConfig import (  # noqa: E402
+    load_analysis_templates,
     load_material_catalog,
     load_solver_presets,
     solver_settings,
@@ -42,19 +43,101 @@ class ConfigurationTests(unittest.TestCase):
                 "mooneyrivlincompressiblemat",
             },
         )
-        self.assertGreaterEqual(len(library), 3)
+        self.assertGreaterEqual(len(library), 2)
         self.assertTrue(all(item.get("params") for item in library))
+        self.assertTrue(all(item.get("compatible_templates") for item in library))
 
     def test_solver_presets_include_vtk_and_text_modes(self):
+        # The catalogue is a pure output-form choice now: which fields (if
+        # any) OOFEM writes as VTK. The engineering model and its numeric
+        # solution controls live on the Analysis tab; nlgeo is set per
+        # cross section.
         presets = load_solver_presets()
         self.assertTrue(any(item["vtk"] for item in presets))
         self.assertTrue(any(not item["vtk"] for item in presets))
-        self.assertTrue(solver_settings("linear-static-vtk")["vtk"])
-        self.assertFalse(solver_settings("linear-static-text")["vtk"])
-        contact = solver_settings("contact-static-vtk")
-        self.assertFalse(contact["nlgeom"])
+        self.assertTrue(solver_settings("vtk")["vtk"])
+        self.assertFalse(solver_settings("text-only")["vtk"])
+        contact = solver_settings("contact-vtk")
         for field_id in ("150", "151", "152"):
             self.assertIn(field_id, contact["vtk_record"])
+
+    def test_output_form_catalogue_carries_no_engineering_model_or_solver_control_key(self):
+        forbidden = {
+            "engng_model",
+            "nsteps",
+            "nlgeom",
+            "rtolv",
+            "rtolf",
+            "rtold",
+            "maxiter",
+            "miniter",
+            "manrmsteps",
+            "minsteplength",
+            "initialguess",
+            "smtype",
+            "lstype",
+            "stiffmode",
+            "renumber",
+            "controlmode",
+            "refloadmode",
+            "updateelasticstiffnessflag",
+            "steplength",
+            "initialsteplength",
+            "psi",
+            "reqiterations",
+            "maxrestarts",
+        }
+        for preset in load_solver_presets():
+            self.assertFalse(forbidden & set(preset), preset.get("id"))
+
+    def test_arc_length_only_params_have_no_catalogue_default(self):
+        # Direct control's own defaults (controlmode/stiffmode/rtolv/maxiter,
+        # matching the retired "Nonlinear static, load control" preset) make
+        # a freshly-selected Nonlinear Static analysis solve out of the box.
+        # Arc-length-only keys must stay defaultless: a default here would
+        # make every fresh Nonlinear Static project fail validation, since
+        # the exporter rejects arc-length keys under direct control.
+        templates = {
+            item["oofem_name"]: item for item in load_analysis_templates()
+        }
+        parameters = {
+            item["key"]: item
+            for item in templates["nonlinearstatic"]["params"]
+        }
+        for key in ("controlmode", "stiffmode", "rtolv", "maxiter"):
+            self.assertTrue(parameters[key]["optional"], key)
+            self.assertIn("default", parameters[key])
+        for key in (
+            "steplength",
+            "initialsteplength",
+            "psi",
+            "reqiterations",
+            "maxrestarts",
+        ):
+            self.assertTrue(parameters[key]["optional"], key)
+            self.assertNotIn("default", parameters[key])
+
+    def test_analysis_catalog_exposes_nonlinear_static_controls(self):
+        templates = {
+            item["oofem_name"]: item for item in load_analysis_templates()
+        }
+        self.assertIn("nonlinearstatic", templates)
+        parameters = {
+            item["key"]: item
+            for item in templates["nonlinearstatic"]["params"]
+        }
+        self.assertEqual(parameters["nsteps"]["default"], 10)
+        # The Analysis tab is the only source of solution controls now, so
+        # the common direct-control defaults are baked in...
+        for key in ("controlmode", "stiffmode", "rtolv", "maxiter"):
+            self.assertTrue(parameters[key]["optional"], key)
+            self.assertIn("default", parameters[key])
+            self.assertTrue(parameters[key]["description"])
+        # ...while arc-length-only controls stay optional with no default.
+        for key in ("steplength", "psi", "updateelasticstiffnessflag"):
+            self.assertTrue(parameters[key]["optional"], key)
+            self.assertNotIn("default", parameters[key])
+            self.assertTrue(parameters[key]["description"])
 
 
 class RunnerTests(unittest.TestCase):

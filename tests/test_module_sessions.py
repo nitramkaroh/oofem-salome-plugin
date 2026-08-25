@@ -169,6 +169,74 @@ class StudySessionTests(unittest.TestCase):
         self.activate(FakeStudy(2))
         self.assertIs(self.module.study_state, state_b)
 
+    def test_reveal_dock_reasserts_visibility_after_a_restored_layout(self):
+        # SALOME restores its saved per-module window layout *after*
+        # activate() returns. A layout recording this dock as hidden
+        # (which is what the "OOFEM" key held in a real install) would
+        # otherwise leave activation looking like a no-op, while the same
+        # dock stayed visible under the "nomodule" layout.
+        self.activate(FakeStudy(1))
+        self.assertTrue(self.module.dock.visible)
+
+        self.module.dock.hide()  # stand in for restoreState() hiding it
+        self.assertFalse(self.module.dock.visible)
+
+        self.assertTrue(self.module._reveal_dock())
+        self.assertTrue(self.module.dock.visible)
+
+    def test_reveal_dock_is_safe_without_a_dock(self):
+        self.module.dock = None
+        self.assertFalse(self.module._reveal_dock())
+        self.assertFalse(self.module._conceal_dock())
+
+    def test_conceal_survives_a_restored_layout_that_wants_it_visible(self):
+        # The mirror image of the reveal case: the real install's saved
+        # "nomodule" layout recorded this dock as *visible*, so simply
+        # hiding it on deactivate() was undone a moment later and the
+        # panel stayed on screen after deselecting the module.
+        self.activate(FakeStudy(1))
+        self.module.deactivate()
+        self.assertFalse(self.module.dock.visible)
+
+        self.module.dock.show()  # stand in for restoreState() re-showing it
+
+        # The pending re-assert from deactivate() must win.
+        self.assertTrue(self.module._conceal_dock())
+        self.assertFalse(self.module.dock.visible)
+
+    def test_a_superseded_pending_assert_cannot_undo_the_newer_intent(self):
+        # A quick activate -> deactivate pair leaves activate()'s "show"
+        # timers still pending. When they fire they must do nothing,
+        # rather than putting the panel back after the user deselected it.
+        self.activate(FakeStudy(1))
+        stale_generation = self.module._dock_visibility_generation
+
+        self.module.deactivate()
+        self.assertFalse(self.module.dock.visible)
+
+        # Exactly what a leftover timer from activate() would call.
+        self.assertFalse(
+            self.module._apply_dock_visibility(stale_generation, True)
+        )
+        self.assertFalse(self.module.dock.visible)
+
+        # The current intent still applies normally.
+        self.assertTrue(
+            self.module._apply_dock_visibility(
+                self.module._dock_visibility_generation, False
+            )
+        )
+
+    def test_deactivate_hides_the_dock(self):
+        # Deselecting OOFEM in the module selector must take its panel
+        # away again, the same way every other SALOME module behaves.
+        self.activate(FakeStudy(1))
+        self.assertTrue(self.module.dock.visible)
+
+        self.module.deactivate()
+
+        self.assertFalse(self.module.dock.visible)
+
     def test_open_files_before_activation_uses_salome_active_study(self):
         study_a = FakeStudy(41)
         study_b = FakeStudy(42)
@@ -386,6 +454,30 @@ class StudySessionTests(unittest.TestCase):
         self.assertFalse(loaded)
         self.assertIs(self.module.study_state, original)
         self.assertEqual(future["schema_version"], PROJECT_SCHEMA_VERSION + 1)
+
+    def test_load_surfaces_a_version_mismatch_instead_of_silently_dropping(self):
+        self.activate(FakeStudy(306))
+        original = {
+            "schema_version": PROJECT_SCHEMA_VERSION,
+            "name": "current",
+        }
+        self.module.set_study_state(original)
+
+        with unittest.mock.patch.object(
+            module_mod.OOFEMState,
+            "load_file",
+            side_effect=module_mod.OOFEMStateVersionError(999),
+        ), unittest.mock.patch.object(
+            module_mod.QtWidgets.QMessageBox, "warning"
+        ) as warning:
+            loaded = self.module.load(
+                ["/unused", module_mod.STATE_FILE_NAME], "future-envelope.hdf"
+            )
+
+        self.assertFalse(loaded)
+        self.assertIs(self.module.study_state, original)
+        warning.assert_called_once()
+        self.assertIn("999", warning.call_args.args[-1])
 
     def test_load_refuses_invalid_or_unbounded_schema_without_losing_state(self):
         self.activate(FakeStudy(305))

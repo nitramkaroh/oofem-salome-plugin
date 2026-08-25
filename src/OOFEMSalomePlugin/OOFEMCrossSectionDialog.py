@@ -1,29 +1,10 @@
 """Dialog for creating and editing OOFEM cross sections."""
 
+from OOFEMSalomePlugin.OOFEMParameterCoercion import (
+    coerce_parameter_value as _coerce_parameter,
+    format_parameter_value as _format_parameter,
+)
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
-
-
-def _format_parameter(value, parameter_type):
-    if value is None:
-        return ""
-    if parameter_type == "float_list" and isinstance(value, (list, tuple)):
-        return ", ".join(str(item) for item in value)
-    return str(value)
-
-
-def _coerce_parameter(text, parameter_type):
-    if parameter_type == "float":
-        return float(text)
-    if parameter_type == "int":
-        return int(text)
-    if parameter_type == "string":
-        return str(text)
-    if parameter_type == "float_list":
-        parts = [part.strip() for part in text.split(",")]
-        if not parts or any(not part for part in parts):
-            raise ValueError("expected comma-separated numbers")
-        return [float(part) for part in parts]
-    raise ValueError("unsupported parameter type '{}'".format(parameter_type))
 
 
 class OOFEMCrossSectionDialog(QtWidgets.QDialog):
@@ -64,12 +45,14 @@ class OOFEMCrossSectionDialog(QtWidgets.QDialog):
         self.materialCombo = QtWidgets.QComboBox()
         self.groupCombo = QtWidgets.QComboBox()
         self.nlgeoCombo = QtWidgets.QComboBox()
-        self.nlgeoCombo.addItem("Inherit solver preset", "inherit")
+        self.nlgeoCombo.addItem("Inherit (off)", "inherit")
         self.nlgeoCombo.addItem("Enabled (write nlgeo 1)", "on")
         self.nlgeoCombo.addItem("Disabled", "off")
         self.nlgeoCombo.setToolTip(
             "Controls the nlgeo field on continuum element records in the "
-            "assigned mesh group. This option is independent of contact."
+            "assigned mesh group. There is no global default: 'Inherit' "
+            "means off, same as 'Disabled'; hyperelastic materials need "
+            "'Enabled' set explicitly here. Independent of contact."
         )
 
         form_layout.addRow("Instance Name:", self.nameEdit)

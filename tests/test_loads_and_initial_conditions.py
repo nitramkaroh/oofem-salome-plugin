@@ -56,7 +56,9 @@ def _initial_condition(
     }
 
 
-def _truss_exporter(loads=None, initial_conditions=None, material_updates=None):
+def _truss_exporter(
+    loads=None, initial_conditions=None, material_updates=None, analysis=None
+):
     mesh, mapping, materials, boundary_conditions = truss_model()
     materials = copy.deepcopy(materials)
     boundary_conditions = copy.deepcopy(boundary_conditions[:-1])
@@ -70,6 +72,7 @@ def _truss_exporter(loads=None, initial_conditions=None, material_updates=None):
         boundary_templates(),
         solver_settings={"vtk": False},
         initial_conditions=copy.deepcopy(initial_conditions or []),
+        analysis=copy.deepcopy(analysis) if analysis else None,
     )
 
 
@@ -341,6 +344,23 @@ class LoadAndInitialConditionExporterTests(unittest.TestCase):
             ]
         )
         self.assertEqual(zero_exporter.validate()["initial_conditions"], 1)
+
+        # NonLinearStatic is incremental but still has no transient dynamics,
+        # so OOFEM would ignore non-zero initial conditions there as well.
+        nonlinear_exporter = _truss_exporter(
+            initial_conditions=[
+                _initial_condition(conditions={"v": 0.5})
+            ],
+            analysis={
+                "id": "analysis-nonlinear",
+                "oofem_type": "NonLinearStatic",
+                "params": {"nsteps": 2},
+            },
+        )
+        with self.assertRaisesRegex(
+            OOFEMValidationError, "non-zero values.*no transient dynamics"
+        ):
+            nonlinear_exporter.validate()
 
     def test_load_parameter_and_target_validation(self):
         invalid_cases = [

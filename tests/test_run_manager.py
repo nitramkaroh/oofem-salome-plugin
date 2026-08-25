@@ -429,6 +429,82 @@ class OOFEMRunManagerTests(unittest.TestCase):
         with self.assertRaises(OOFEMRunStateError):
             self.manager.finish_run(handle.run_id, 0)
 
+    def test_held_reservation_blocks_concurrent_delete_during_export(self):
+        # Reproduces the unlocked window the GUI's runSolver() used to leave
+        # between reserve_run() and register_input(): a second widget/
+        # session sharing the same run-history root must not be able to
+        # delete_run() a reservation while it is still being held.
+        handle = self.manager.reserve_run(
+            PROJECT,
+            "model.in",
+            ["/opt/oofem", "-f", "{input}"],
+        )
+        second_manager = OOFEMRunManager(self.root)
+        started = threading.Event()
+        finished = threading.Event()
+        errors = []
+
+        def delete_in_second_manager():
+            started.set()
+            try:
+                second_manager.delete_run(handle.run_id)
+            except Exception as error:  # pragma: no cover - diagnostic capture
+                errors.append(error)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=delete_in_second_manager)
+        with self.manager.held_reservation(handle.run_id):
+            worker.start()
+            self.assertTrue(started.wait(1.0))
+            self.assertFalse(finished.wait(0.05))
+            # Still holding the reservation: the directory must still exist.
+            self.assertTrue(pathlib.Path(handle.directory).is_dir())
+            pathlib.Path(handle.input_file).write_text(
+                "result.out\nbody\n", encoding="utf-8"
+            )
+            self.manager.register_input(handle.run_id)
+
+        worker.join(2.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertFalse(pathlib.Path(handle.directory).exists())
+
+    def test_held_reservation_is_reentrant_for_the_same_thread(self):
+        # register_input()/mark_failed() are @_locked_run themselves; a
+        # caller holding held_reservation() across export must still be
+        # able to call them for the same run_id without deadlocking on its
+        # own lock.
+        handle = self.manager.reserve_run(
+            PROJECT,
+            "model.in",
+            ["/opt/oofem", "-f", "{input}"],
+        )
+        completed = threading.Event()
+        errors = []
+
+        def run_reentrant_sequence():
+            try:
+                with self.manager.held_reservation(handle.run_id):
+                    pathlib.Path(handle.input_file).write_text(
+                        "result.out\nbody\n", encoding="utf-8"
+                    )
+                    self.manager.register_input(handle.run_id)
+                    self.manager.mark_running(handle.run_id)
+            except Exception as error:  # pragma: no cover - diagnostic capture
+                errors.append(error)
+            finally:
+                completed.set()
+
+        worker = threading.Thread(target=run_reentrant_sequence)
+        worker.start()
+        self.assertTrue(
+            completed.wait(2.0), "held_reservation() self-deadlocked"
+        )
+        worker.join(2.0)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.manager.load_run(handle.run_id)["status"], RUNNING)
+
     def test_manifest_path_traversal_is_rejected(self):
         handle = _reserve_and_register(self.manager)
         manifest_path = pathlib.Path(handle.directory) / MANIFEST_FILE_NAME
