@@ -113,19 +113,27 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.analysisPropsTable.cellChanged.connect(self.onAnalysisPropertyChanged)
         analysis_layout.addWidget(self.analysisPropsTable)
 
-        time_group = QtWidgets.QGroupBox("Load Time Functions")
-        time_layout = QtWidgets.QVBoxLayout(time_group)
+        # Finish the Analysis tab
+        self.tabs.addTab(analysis_tab, "Analysis")
+
+        # Tab: Time Functions
+        time_tab = QtWidgets.QWidget()
+        time_layout = QtWidgets.QVBoxLayout(time_tab)
+        
         time_buttons = QtWidgets.QHBoxLayout()
-        self.addTimeFunctionBtn = QtWidgets.QPushButton("Add")
+        self.addTimeFunctionBtn = QtWidgets.QPushButton("Add Time Function")
         self.addTimeFunctionBtn.clicked.connect(self.addTimeFunction)
         time_buttons.addWidget(self.addTimeFunctionBtn)
-        self.editTimeFunctionBtn = QtWidgets.QPushButton("Edit")
+        
+        self.editTimeFunctionBtn = QtWidgets.QPushButton("Edit Time Function")
         self.editTimeFunctionBtn.clicked.connect(self.editTimeFunction)
         time_buttons.addWidget(self.editTimeFunctionBtn)
-        self.removeTimeFunctionBtn = QtWidgets.QPushButton("Remove")
+        
+        self.removeTimeFunctionBtn = QtWidgets.QPushButton("Remove Time Function")
         self.removeTimeFunctionBtn.clicked.connect(self.removeTimeFunction)
         time_buttons.addWidget(self.removeTimeFunctionBtn)
         time_layout.addLayout(time_buttons)
+        
         self.timeFunctionTable = QtWidgets.QTableWidget()
         self.timeFunctionTable.setColumnCount(2)
         self.timeFunctionTable.setHorizontalHeaderLabels(["Name", "OOFEM Type"])
@@ -137,8 +145,9 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         )
         self.timeFunctionTable.doubleClicked.connect(self.editTimeFunction)
         time_layout.addWidget(self.timeFunctionTable)
-        analysis_layout.addWidget(time_group)
-        self.tabs.addTab(analysis_tab, "Analysis")
+        
+        # Add the new tab to the main tab widget
+        self.tabs.addTab(time_tab, "Time Functions")
 
         # Tab: which fields (if any) OOFEM writes as VTK output. Everything
         # about the solver itself (engineering model, iteration controls)
