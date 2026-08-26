@@ -1,31 +1,101 @@
 {
   "materials": [
     {
-      "oofem_name": "IsoLE",
+      "oofem_name": "ElasticIsotropic3d",
       "display_name": "3D Isotropic Elastic",
       "params": [
-        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
-        {"key": "n", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
-        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "The density of the material. Units: kg/m^3", "optional": false},
-        {"key": "tAlpha", "name": "Thermal Expansion Coefficient", "type": "float", "default": 0.0, "description": "The coefficient of thermal expansion. Units: 1/K", "optional": false}
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 210000000000.0, "description": "Young's modulus in the unit system used by the model."},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "Dimensionless Poisson ratio."},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
+        {"key": "alpha", "name": "Thermal Expansion", "type": "float", "default": 0.0, "description": "Coefficient of thermal expansion.", "optional": true}
       ]
     },
     {
-      "oofem_name": "OtherMaterial_1",
+      "oofem_name": "ElasticIsotropic2d",
       "display_name": "2D Isotropic Elastic (Plane Stress)",
       "params": [
-        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
-        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "The ratio of transverse to axial strain. Dimensionless."},
-        {"key": "t", "name": "Thickness", "type": "float", "default": 0.01, "description": "The out-of-plane thickness for plane stress elements. Units: m"}
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 210000000000.0, "description": "Young's modulus in the unit system used by the model."},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "Dimensionless Poisson ratio."},
+        {"key": "t", "name": "Thickness", "type": "float", "default": 0.01, "description": "Out-of-plane thickness."},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
+        {"key": "alpha", "name": "Thermal Expansion", "type": "float", "default": 0.0, "description": "Coefficient of thermal expansion.", "optional": true}
       ]
     },
     {
-      "oofem_name": "OtherMaterial_2",
+      "oofem_name": "Truss",
       "display_name": "1D Truss",
       "params": [
-        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 2.1e11, "description": "The measure of the material's stiffness. Units: Pa"},
-        {"key": "A", "name": "Cross-section Area", "type": "float", "default": 0.01, "description": "The area of the truss cross-section. Units: m^2"}
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 210000000000.0, "description": "Young's modulus in the unit system used by the model."},
+        {"key": "A", "name": "Cross-section Area", "type": "float", "default": 0.01, "description": "Truss cross-section area."},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
+        {"key": "alpha", "name": "Thermal Expansion", "type": "float", "default": 0.0, "description": "Coefficient of thermal expansion.", "optional": true}
       ]
+    },
+    {
+      "oofem_name": "idm1",
+      "display_name": "Isotropic Damage (idm1, exponential softening)",
+      "params": [
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 30000000000.0, "description": "Young's modulus of the undamaged elastic material."},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.2, "description": "Dimensionless Poisson ratio."},
+        {"key": "e0", "name": "Strain at Damage Onset", "type": "float", "default": 0.0001, "description": "Equivalent strain at which damage begins (e0)."},
+        {"key": "ef", "name": "Fracturing Strain", "type": "float", "default": 0.001, "description": "Softening-law fracturing strain controlling post-peak decay (ef)."},
+        {"key": "equivstraintype", "name": "Equivalent Strain Type", "type": "int", "default": 0, "description": "0=Mazars, 1=Rankine (smooth), 3=von Mises, 4=Rankine (standard). See OOFEM idm1 documentation for the full list."},
+        {"key": "damlaw", "name": "Softening Law", "type": "int", "default": 0, "description": "0=exponential, 1=linear, 3=Hordijk. See OOFEM idm1 documentation for the full list."},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
+        {"key": "alpha", "name": "Thermal Expansion", "type": "float", "default": 0.0, "description": "Coefficient of thermal expansion.", "optional": true}
+      ]
+    },
+    {
+      "oofem_name": "misesmat",
+      "display_name": "Von Mises Plasticity (MisesMat)",
+      "params": [
+        {"key": "E", "name": "Young's Modulus", "type": "float", "default": 210000000000.0, "description": "Young's modulus of the elastic material."},
+        {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "Dimensionless Poisson ratio."},
+        {"key": "sig0", "name": "Initial Yield Stress", "type": "float", "default": 250000000.0, "description": "Initial uniaxial yield stress (sig0)."},
+        {"key": "h", "name": "Hardening Modulus", "type": "float", "default": 0.0, "description": "Linear isotropic hardening modulus (H).", "optional": true},
+        {"key": "omega_crit", "name": "Critical Damage", "type": "float", "default": 0.0, "description": "Maximum allowed damage coupled to plasticity; 0 disables damage.", "optional": true},
+        {"key": "a", "name": "Damage-law Exponent", "type": "float", "default": 0.0, "description": "Exponent of the damage evolution law; only used with omega_crit > 0.", "optional": true},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
+        {"key": "alpha", "name": "Thermal Expansion", "type": "float", "default": 0.0, "description": "Coefficient of thermal expansion.", "optional": true}
+      ]
+    },
+    {
+      "oofem_name": "ogdencompressiblemat",
+      "display_name": "Ogden Hyperelastic (compressible)",
+      "params": [
+        {"key": "k", "name": "Bulk Modulus", "type": "float", "default": 1000000000.0, "description": "Volumetric bulk modulus (K)."},
+        {"key": "alpha1", "name": "Alpha 1", "type": "float", "default": 2.0, "description": "First Ogden exponent term."},
+        {"key": "mu1", "name": "Mu 1", "type": "float", "default": 1000000.0, "description": "First Ogden shear-modulus-like term, paired with Alpha 1."},
+        {"key": "alpha2", "name": "Alpha 2", "type": "float", "default": 0.0, "description": "Second Ogden exponent term; leave blank to use a single term.", "optional": true},
+        {"key": "mu2", "name": "Mu 2", "type": "float", "default": 0.0, "description": "Second Ogden term, paired with Alpha 2; leave blank to use a single term.", "optional": true},
+        {"key": "alpha3", "name": "Alpha 3", "type": "float", "default": 0.0, "description": "Third Ogden exponent term; leave blank if unused.", "optional": true},
+        {"key": "mu3", "name": "Mu 3", "type": "float", "default": 0.0, "description": "Third Ogden term, paired with Alpha 3; leave blank if unused.", "optional": true},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true}
+      ]
+    },
+    {
+      "oofem_name": "mooneyrivlincompressiblemat",
+      "display_name": "Mooney-Rivlin Hyperelastic (compressible)",
+      "params": [
+        {"key": "k", "name": "Bulk Modulus", "type": "float", "default": 1000000000.0, "description": "Volumetric bulk modulus (K)."},
+        {"key": "c1", "name": "C1", "type": "float", "default": 1000000.0, "description": "Mooney-Rivlin constant C1."},
+        {"key": "c2", "name": "C2", "type": "float", "default": 0.0, "description": "Mooney-Rivlin constant C2; set to 0 for a compressible Neo-Hookean material.", "optional": true},
+        {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true}
+      ]
+    }
+  ],
+  "library": [
+    {
+      "id": "elasticisotropic-e210",
+      "display_name": "ElasticIsotropic (E=210 GPa, nu=0.30, rho=7850 kg/m3)",
+      "compatible_templates": ["ElasticIsotropic3d", "ElasticIsotropic2d"],
+      "params": {"E": 210000000000.0, "nu": 0.3, "d": 7850.0, "alpha": 0.000012}
+    },
+    {
+      "id": "truss-e210",
+      "display_name": "Truss (E=210 GPa, A=0.01 m2)",
+      "compatible_templates": ["Truss"],
+      "params": {"E": 210000000000.0, "A": 0.01, "d": 7850.0, "alpha": 0.000012}
     }
   ]
 }

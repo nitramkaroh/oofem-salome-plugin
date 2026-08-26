@@ -1,7 +1,7 @@
 {
   "cross_sections": [
     {
-      "oofem_name": "SimpleCS ",
+      "oofem_name": "simplecs",
       "display_name": "SimpleCS",
       "description": "Integral cross section with constant properties.",
       "params": [
@@ -27,7 +27,7 @@
           "description": "The area of the cross section."
         },
         {
-          "key": "Iy",
+          "key": "iy",
           "name": "Moment of Inertia Iy",
           "type": "float",
           "default": 1.0,
@@ -35,7 +35,7 @@
           "optional": true
         },
         {
-          "key": "Iz",
+          "key": "iz",
           "name": "Moment of Inertia Iz",
           "type": "float",
           "default": 1.0,
@@ -43,7 +43,7 @@
           "optional": true
         },
         {
-          "key": "Ik",
+          "key": "ik",
           "name": "Torsional Constant Ik",
           "type": "float",
           "default": 1.0,

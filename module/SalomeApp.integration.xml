@@ -1,0 +1,16 @@
+  <!-- BEGIN OOFEM SALOME MODULE (managed by oofem-salome-plugin) -->
+  <section name="OOFEM">
+    <parameter name="name" value="OOFEM"/>
+    <parameter name="icon" value="oofem.png"/>
+    <parameter name="library" value="SalomePyQtGUILight"/>
+    <parameter name="version" value="1.0"/>
+    <parameter name="solver_executable" value=""/>
+    <parameter name="working_directory" value=""/>
+    <parameter name="results_directory" value=""/>
+    <parameter name="solver_timeout" value="300"/>
+    <parameter name="auto_open_paravis" value="false"/>
+  </section>
+  <section name="resources">
+    <parameter name="OOFEM" value="%OOFEM_ROOT_DIR%/share/salome/resources/oofem"/>
+  </section>
+  <!-- END OOFEM SALOME MODULE (managed by oofem-salome-plugin) -->

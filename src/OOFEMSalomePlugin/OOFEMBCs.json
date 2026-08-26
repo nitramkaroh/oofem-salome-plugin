@@ -1,32 +1,58 @@
 {
   "boundary_conditions": [
-     {
-      "oofem_name": "BoundaryCondition",
-      "display_name": "Dirichlet BC (Prescribed DOF)",
-      "apply_to": "nodes",
-      "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (D_u(1), D_v(2), D_w(3)=y)."},
-        {"key": "Values", "name": "Values", "type": "floatarray", "default": "", "description": "Prescribed DOF values."}
-      ]
-    },
     {
       "oofem_name": "NodalLoad",
-      "display_name": "Nodal Load/Flux",
+      "display_name": "Nodal Load",
       "apply_to": "nodes",
       "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (1=x, 2=y, 3=z)."},
-        {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Nodal Load/Flux DOF values."}
+        {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Comma-separated degrees of freedom (1=x, 2=y, 3=z)."},
+        {"key": "components", "name": "Components", "type": "float_list", "default": [0.0], "description": "Comma-separated load components matching the DOFs."}
       ]
     },
     {
-      "oofem_name": "ConstantEdgeLoad",
-      "display_name": "Constant Edge Load (on Element Boundary)",
-      "apply_to": "elementedges",
+      "oofem_name": "Displacement",
+      "display_name": "Nodal Displacement",
+      "apply_to": "nodes",
       "params": [
-        {"key": "DOFs", "name": "DOFs", "type": "intarray", "default": "", "description": "Degree of freedom (D_u(1), D_v(2), D_w(3)=y)."},
-        {"key": "Components", "name": "Components", "type": "floatarray", "default": "", "description": "Load components in the specified DOFs."},
-        {"key": "loadtype", "name": "LoadType", "type": "int", "default": "3", "description": "Type of load (e.g., pressure, traction)."},
-        {"key": "csType", "name": "cstype", "type": "int", "default": 0, "description": "The load can be defined in global coordinate system (csType = 0, default) or in entity - specific local coordinate system (csType = 1)."}
+        {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Comma-separated prescribed degrees of freedom (1=x, 2=y, 3=z)."},
+        {"key": "values", "name": "Values", "type": "float_list", "default": [0.0], "description": "Comma-separated prescribed values matching the DOFs."}
+      ]
+    },
+    {
+      "oofem_name": "SurfaceLoad",
+      "display_name": "Surface Load (on Element Boundary)",
+      "apply_to": "element_boundary",
+      "params": [
+        {"key": "dofs", "name": "Directions", "type": "int_list", "default": [2], "description": "Comma-separated global load directions (1=x, 2=y, 3=z)."},
+        {"key": "components", "name": "Components", "type": "float_list", "default": [-1000.0], "description": "Comma-separated traction components matching the directions."}
+      ]
+    },
+    {
+      "oofem_name": "DeadWeight",
+      "display_name": "Body Load / Dead Weight",
+      "apply_to": "elements",
+      "params": [
+        {"key": "dofs", "name": "Directions", "type": "int_list", "default": [1], "description": "Comma-separated global load directions (1=x, 2=y, 3=z)."},
+        {"key": "components", "name": "Accelerations", "type": "float_list", "default": [-9.81], "description": "Acceleration-like components matching the directions; OOFEM multiplies them by material density."}
+      ]
+    },
+    {
+      "oofem_name": "StructuralTemperatureLoad",
+      "display_name": "Structural Temperature Load",
+      "apply_to": "elements",
+      "params": [
+        {"key": "components", "name": "Uniform Temperature Increment", "type": "float_list", "default": [0.0, 0.0], "description": "Uniform temperature increment followed by zero. Non-zero beam/plate/shell gradient components are reserved until those element families are supported."}
+      ]
+    }
+  ],
+  "initial_conditions": [
+    {
+      "oofem_name": "InitialCondition",
+      "display_name": "Constant Structural Initial Condition",
+      "apply_to": "nodes",
+      "params": [
+        {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Structural translational DOFs receiving the initial condition (1=x, 2=y, 3=z)."},
+        {"key": "conditions", "name": "Value Modes", "type": "mode_value_map", "default": {"u": 0.0}, "description": "Constant OOFEM value-mode map: u=total value, v=velocity, a=acceleration."}
       ]
     }
   ]

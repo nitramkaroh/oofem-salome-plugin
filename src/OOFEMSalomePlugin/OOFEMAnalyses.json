@@ -1,7 +1,7 @@
 {
   "analyses": [
     {
-      "oofem_name": "StaticStructural",
+      "oofem_name": "staticstructural",
       "display_name": "Static Structural",
       "description": "Nonlinear static structural analysis.",
       "params": [
@@ -19,12 +19,226 @@
           "default": 1.0,
           "optional": true,
           "description": "Length of time step."
+        },
+        {
+          "key": "rtolv",
+          "name": "Relative Tolerance",
+          "type": "float",
+          "optional": true,
+          "description": "Relative convergence tolerance for the iteration norms."
+        },
+        {
+          "key": "maxiter",
+          "name": "Maximum Iterations",
+          "type": "int",
+          "optional": true,
+          "description": "Maximum equilibrium iterations per solution step."
+        },
+        {
+          "key": "stiffmode",
+          "name": "Stiffness Mode",
+          "type": "int",
+          "optional": true,
+          "description": "0 = tangent stiffness, 1 = secant, 2 = initial elastic, 3 = secant updated per load step."
+        },
+        {
+          "key": "manrmsteps",
+          "name": "Modified NR Steps",
+          "type": "int",
+          "optional": true,
+          "description": "Number of iterations reusing the stiffness before it is reassembled. 0 keeps the full method."
+        },
+        {
+          "key": "initialguess",
+          "name": "Initial Guess",
+          "type": "int",
+          "optional": true,
+          "description": "Initial-guess strategy passed to the linear solver."
+        },
+        {
+          "key": "smtype",
+          "name": "Sparse Matrix Type",
+          "type": "int",
+          "optional": true,
+          "description": "OOFEM sparse-matrix storage type."
+        },
+        {
+          "key": "renumber",
+          "name": "Renumber",
+          "type": "int",
+          "optional": true,
+          "description": "1 renumbers equations each step; 0 keeps the initial numbering."
         }
       ]
     },
     {
-      "oofem_name": "LinearStatics",
-      "display_name": "Linear Statics",
+      "oofem_name": "nonlinearstatic",
+      "display_name": "Nonlinear Static",
+      "description": "Incremental nonlinear static analysis with explicit solution control: direct Newton-Raphson load control, or indirect cylindrical arc-length control for limit points and snap-through. Unlike Static Structural, OOFEM treats the loads reached at each step as the load INCREMENT of that step, so a constant load history walks the equilibrium path in equal increments and reaches nsteps times the reference load.",
+      "params": [
+        {
+          "key": "nsteps",
+          "name": "Number of Steps",
+          "type": "int",
+          "default": 10,
+          "description": "Number of solution increments. The total applied load is the accumulated per-step increment, not the load at the final step time."
+        },
+        {
+          "key": "controlmode",
+          "name": "Control Mode",
+          "type": "int",
+          "default": 1,
+          "description": "1 = direct control (Newton-Raphson load control), 0 = indirect cylindrical arc-length control. The two modes drive different OOFEM solvers, so their parameters are disjoint; arc-length control additionally requires Arc-Length Step.",
+          "optional": true
+        },
+        {
+          "key": "stiffmode",
+          "name": "Stiffness Mode",
+          "type": "int",
+          "default": 0,
+          "description": "0 = tangent stiffness, 1 = secant, 2 = initial elastic, 3 = secant updated per load step.",
+          "optional": true
+        },
+        {
+          "key": "rtolv",
+          "name": "Relative Tolerance",
+          "type": "float",
+          "default": 1e-06,
+          "description": "Relative convergence tolerance for the iteration norms.",
+          "optional": true
+        },
+        {
+          "key": "maxiter",
+          "name": "Maximum Iterations",
+          "type": "int",
+          "default": 100,
+          "description": "Maximum equilibrium iterations per solution step.",
+          "optional": true
+        },
+        {
+          "key": "deltat",
+          "name": "Time Step",
+          "type": "float",
+          "optional": true,
+          "description": "Length of one solution step in the time-function argument."
+        },
+        {
+          "key": "refloadmode",
+          "name": "Reference Load Mode",
+          "type": "int",
+          "optional": true,
+          "description": "0 = the step increment is the total load assembled at the step time (the OOFEM default), 1 = the step increment is the load increment between step times, which leaves a constant load history with no load at all."
+        },
+        {
+          "key": "manrmsteps",
+          "name": "Modified NR Steps",
+          "type": "int",
+          "optional": true,
+          "description": "Number of iterations reusing the stiffness before it is reassembled (modified Newton-Raphson). 0 keeps the full method."
+        },
+        {
+          "key": "miniter",
+          "name": "Minimum Iterations",
+          "type": "int",
+          "optional": true,
+          "description": "Minimum equilibrium iterations forced per solution step."
+        },
+        {
+          "key": "minsteplength",
+          "name": "Minimum Step Length",
+          "type": "float",
+          "optional": true,
+          "description": "Smallest admissible step length before the solver reports divergence."
+        },
+        {
+          "key": "updateelasticstiffnessflag",
+          "name": "Update Elastic Stiffness",
+          "type": "int",
+          "optional": true,
+          "description": "1 writes the valueless updateelasticstiffnessflag keyword, which refreshes the elastic stiffness used by the secant and elastic stiffness modes. 0 or empty omits it."
+        },
+        {
+          "key": "steplength",
+          "name": "Arc-Length Step",
+          "type": "float",
+          "optional": true,
+          "description": "Maximum arc length per step. Required by, and valid only for, indirect control (Control Mode 0)."
+        },
+        {
+          "key": "initialsteplength",
+          "name": "Initial Arc-Length Step",
+          "type": "float",
+          "optional": true,
+          "description": "Arc length of the first step. Indirect control only."
+        },
+        {
+          "key": "psi",
+          "name": "Arc-Length Psi",
+          "type": "float",
+          "optional": true,
+          "description": "Weight of the load term in the arc-length constraint; 0 controls displacements only. Indirect control only."
+        },
+        {
+          "key": "reqiterations",
+          "name": "Required Iterations",
+          "type": "int",
+          "optional": true,
+          "description": "Iteration count the arc-length step adapts towards. Indirect control only."
+        },
+        {
+          "key": "maxrestarts",
+          "name": "Maximum Restarts",
+          "type": "int",
+          "optional": true,
+          "description": "Number of step restarts allowed after a failed increment. Indirect control only."
+        },
+        {
+          "key": "renumber",
+          "name": "Renumber",
+          "type": "int",
+          "optional": true,
+          "description": "1 renumbers equations each step; 0 keeps the initial numbering."
+        },
+        {
+          "key": "initialguess",
+          "name": "Initial Guess",
+          "type": "int",
+          "optional": true,
+          "description": "Initial-guess strategy passed to the linear solver."
+        },
+        {
+          "key": "lstype",
+          "name": "Linear Solver Type",
+          "type": "int",
+          "optional": true,
+          "description": "OOFEM linear-solver type."
+        },
+        {
+          "key": "smtype",
+          "name": "Sparse Matrix Type",
+          "type": "int",
+          "optional": true,
+          "description": "OOFEM sparse-matrix storage type."
+        },
+        {
+          "key": "rtolf",
+          "name": "Relative Force Tolerance",
+          "type": "float",
+          "optional": true,
+          "description": "Relative convergence tolerance on the force norm."
+        },
+        {
+          "key": "rtold",
+          "name": "Relative Displacement Tolerance",
+          "type": "float",
+          "optional": true,
+          "description": "Relative convergence tolerance on the displacement norm."
+        }
+      ]
+    },
+    {
+      "oofem_name": "linearstatic",
+      "display_name": "Linear Static",
       "description": "Linear static analysis with multiple load cases.",
       "params": [
         {
@@ -37,7 +251,7 @@
       ]
     },
     {
-      "oofem_name": "EigenValueDynamic",
+      "oofem_name": "eigenvaluedynamic",
       "display_name": "Eigenvalue Dynamic",
       "description": "Computes eigenvalues and eigenvectors.",
       "params": [
@@ -52,7 +266,7 @@
           "key": "rtolv",
           "name": "Relative Tolerance",
           "type": "float",
-          "default": 1e-6,
+          "default": 1e-06,
           "description": "Relative convergence tolerance."
         }
       ]

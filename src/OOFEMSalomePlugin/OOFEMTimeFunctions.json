@@ -1,7 +1,7 @@
 {
   "time_functions": [
     {
-      "oofem_name": "ConstantFunction",
+      "oofem_name": "constantfunction",
       "display_name": "Constant",
       "description": "A constant value over time.",
       "params": [
@@ -15,33 +15,23 @@
       ]
     },
     {
-      "oofem_name": "Linear",
+      "oofem_name": "piecewiselinfunction",
       "display_name": "Linear Ramp",
       "description": "Linearly interpolates between two values over a given time interval.",
       "params": [
         {
-          "key": "t0",
-          "name": "Start Time",
-          "type": "float",
-          "default": 0.0
+          "key": "t",
+          "name": "Times",
+          "type": "float_list",
+          "default": [0.0, 1.0],
+          "description": "Comma-separated, strictly increasing time coordinates."
         },
         {
-          "key": "v0",
-          "name": "Start Value",
-          "type": "float",
-          "default": 0.0
-        },
-        {
-          "key": "t1",
-          "name": "End Time",
-          "type": "float",
-          "default": 1.0
-        },
-        {
-          "key": "v1",
-          "name": "End Value",
-          "type": "float",
-          "default": 1.0
+          "key": "f(t)",
+          "name": "Values",
+          "type": "float_list",
+          "default": [0.0, 1.0],
+          "description": "Comma-separated values corresponding to the time coordinates."
         }
       ]
     }
