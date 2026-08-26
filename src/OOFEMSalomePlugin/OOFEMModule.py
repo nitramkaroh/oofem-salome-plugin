@@ -38,9 +38,17 @@ def _study_key(study):
     if study is None:
         return _NO_STUDY_KEY
 
-    # ``_get_StudyId`` is the omniORB spelling used by SALOMEDS.  The other
-    # names make the resolver work with local wrappers and test doubles too.
-    for name in ("_get_StudyId", "GetStudyId", "StudyId"):
+    # 1. Check study ID methods / attributes on the proxy
+    for name in (
+        "_get_StudyId",
+        "GetStudyId",
+        "StudyId",
+        "_get_studyId",
+        "getStudyId",
+        "GetID",
+        "GetId",
+        "getId",
+    ):
         try:
             value = getattr(study, name)
             value = value() if callable(value) else value
@@ -48,6 +56,43 @@ def _study_key(study):
             continue
         if value is not None and value != "":
             return ("study-id", str(value))
+
+    # 2. Check study URL (for saved HDF studies)
+    for name in ("GetURL", "GetStudyUrl", "URL", "_get_URL", "_get_Url"):
+        try:
+            value = getattr(study, name)
+            value = value() if callable(value) else value
+        except Exception:
+            continue
+        if value is not None and str(value).strip() != "":
+            return (
+                "study-url",
+                os.path.normcase(os.path.normpath(str(value).strip())),
+            )
+
+    # 3. Check salome.myStudyId if study is active
+    try:
+        import salome
+
+        if (
+            getattr(salome, "myStudy", None) is study
+            or getattr(salome, "myStudy", None) == study
+        ):
+            study_id = getattr(salome, "myStudyId", None)
+            if study_id is not None and study_id != "":
+                return ("study-id", str(study_id))
+    except Exception:
+        pass
+
+    # 4. Check study Name
+    for name in ("GetName", "Name", "_get_Name"):
+        try:
+            value = getattr(study, name)
+            value = value() if callable(value) else value
+        except Exception:
+            continue
+        if value is not None and str(value).strip() != "":
+            return ("study-name", str(value).strip())
 
     return ("study-object", id(study))
 
@@ -298,6 +343,7 @@ class OOFEMModule:
             return False
         session = self._ensure_session(study)
         session.state = state
+        OOFEMState.save(study, state)
         if mark_modified and session.key == self._active_study_key:
             self._mark_study_modified()
         return True
@@ -309,6 +355,13 @@ class OOFEMModule:
         try:
             study = getattr(self.context, "study", None)
             session = self._select_study(study)
+            if not session.state and study is not None:
+                persisted = OOFEMState.load(study)
+                if persisted:
+                    try:
+                        session.state = _prepare_loaded_state(persisted)
+                    except Exception:
+                        session.state = persisted
             from OOFEMSalomePlugin.OOFEMSalome import load_smesh_component
 
             try:
@@ -328,6 +381,7 @@ class OOFEMModule:
             self.dock.mainWidget.populateAll(study=study, state=session.state)
             if isinstance(self.dock.mainWidget.state, dict):
                 session.state = self.dock.mainWidget.state
+                OOFEMState.save(study, session.state)
             return self.dock
         except Exception as error:
             _logger.exception("Failed to activate the OOFEM plugin")
@@ -365,6 +419,8 @@ class OOFEMModule:
                         exc_info=True,
                     )
                 self._snapshot_widget_session()
+                if widget_study is not None and isinstance(self.study_state, dict):
+                    OOFEMState.save(widget_study, self.study_state)
         return self.study_state
 
     def _mark_study_modified(self):
@@ -389,6 +445,9 @@ class OOFEMModule:
             return False
         session = self._active_session()
         session.state = state
+        study = session.study or self._runtime_study()
+        if study is not None:
+            OOFEMState.save(study, state)
         if self.dock is not None:
             widget = self.dock.mainWidget
             widget_study = getattr(widget, "study", None)
@@ -401,6 +460,7 @@ class OOFEMModule:
                 widget.populateAll(study=refresh_study, state=state)
                 if isinstance(widget.state, dict):
                     session.state = widget.state
+                    OOFEMState.save(refresh_study, session.state)
             elif not refresh:
                 widget.state = state
         if mark_modified:
