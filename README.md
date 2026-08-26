@@ -220,23 +220,22 @@ Both install and uninstall are idempotent, and both preserve any other
 plugin's registration in a shared `salome_plugins.py` — only OOFEM's own
 marked block is added or removed.
 
-### Windows
+### Windows (Native Module)
 
 ~~~powershell
 git clone https://github.com/oofem/oofem-salome-plugin.git
 Set-Location oofem-salome-plugin
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+.\install-salome-module.ps1 -SalomeDir C:\SALOME-9.15.0
 ~~~
 
-The default destination is %USERPROFILE%\.config\salome\Plugins. A custom
-location can be supplied with:
+Start SALOME and select **OOFEM** from the module selector.
+
+### Windows (Legacy Tools Plugin, opt-in)
 
 ~~~powershell
-.\install.ps1 -TargetDir C:\path\to\salome\plugins
+.\install.ps1 -Uninstall                 # remove Tools > Plugins > OOFEM
+.\install.ps1 -LegacyToolsPlugin         # install legacy entry anyway
 ~~~
-
-`install.ps1` still installs the legacy entry unconditionally and has no
-automated test coverage; prefer the native module on Windows too.
 
 For development without installation, start SALOME with the checkout on its
 plugin path:

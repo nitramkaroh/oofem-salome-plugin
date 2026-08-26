@@ -24,7 +24,7 @@ OOFEM_SETTINGS = {
 
 
 def _salome_version(salome_dir: pathlib.Path) -> str:
-    roots = [salome_dir / "INSTALL"]
+    roots = [salome_dir / "INSTALL", salome_dir / "W64"]
     try:
         roots.extend(
             sorted(
@@ -63,7 +63,13 @@ def _default_config_path(salome_dir: pathlib.Path) -> pathlib.Path:
         root = pathlib.Path(config_home).expanduser()
     else:
         root = pathlib.Path.home() / ".config"
-    return root / "salome" / f"SalomeApprc.{_salome_version(salome_dir)}"
+    salome_config_dir = root / "salome"
+    version = _salome_version(salome_dir)
+    for candidate_name in (f"SalomeApprc.{version}", f"SalomeApp.xml.{version}"):
+        candidate = salome_config_dir / candidate_name
+        if candidate.exists():
+            return candidate
+    return salome_config_dir / f"SalomeApprc.{version}"
 
 
 def _new_document():
