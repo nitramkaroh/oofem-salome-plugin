@@ -195,6 +195,8 @@ class OOFEMExporter:
         key = str(value or "").strip().casefold()
         if key == "structtemperatureload":
             return "structuraltemperatureload"
+        if key in ("displacement", "boundarycondition"):
+            return "boundarycondition"
         return key
 
     @staticmethod
@@ -979,7 +981,7 @@ class OOFEMExporter:
             return [], values
 
         raw_values = parameters.get("components")
-        if bc_type_key == "displacement":
+        if bc_type_key in ("boundarycondition", "displacement"):
             raw_values = parameters.get("values")
         if raw_values is None and "val" in parameters:
             raw_values = [parameters.get("val")]
@@ -1151,7 +1153,7 @@ class OOFEMExporter:
         ):
             if (
                 self._boundary_type_key(boundary_condition.get("oofem_type"))
-                != "displacement"
+                not in ("boundarycondition", "displacement")
             ):
                 continue
             group = groups.get(boundary_condition.get("assigned_group"))
@@ -2341,7 +2343,7 @@ class OOFEMExporter:
             value_text = " ".join(
                 self._format_number(value) for value in component_values
             )
-            if bc_type_key == "displacement":
+            if bc_type_key in ("boundarycondition", "displacement"):
                 output.write(
                     "BoundaryCondition {} loadTimeFunction {} dofs {} {} "
                     "values {} {} set {}\n".format(

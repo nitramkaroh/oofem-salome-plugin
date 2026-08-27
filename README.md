@@ -432,7 +432,7 @@ Use the following plugin assignments:
 3. Add another with `E=70000`, `nu=0.33`, `t=0.10` on
    `MAT_RIGHT_FACES`. Review the two generated `SimpleCS` records and
    their `thick=0.10` values.
-4. Add one zero **Nodal Displacement** on `BC_FIXED_LEFT`, with DOFs
+4. Add one zero **Dirichlet Condition (Prescribed DOFs)** on `BC_FIXED_LEFT`, with DOFs
    `1, 2` and values `0, 0`.
 5. Add **Surface Load (on Element Boundary)** on `LOAD_RIGHT_EDGE`, DOF
    `2`, component `-100`. As an alternative, use a **Nodal Load** on

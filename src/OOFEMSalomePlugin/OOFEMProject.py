@@ -143,6 +143,8 @@ def _migrate_boundary_conditions(project, default_time_function_id):
     for boundary_condition in boundary_conditions:
         if not isinstance(boundary_condition, dict):
             continue
+        if boundary_condition.get("oofem_type") == "Displacement":
+            boundary_condition["oofem_type"] = "BoundaryCondition"
         params = boundary_condition.get("params")
         if not isinstance(params, dict):
             params = {}

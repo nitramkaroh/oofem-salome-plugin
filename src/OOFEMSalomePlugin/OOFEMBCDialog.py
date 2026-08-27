@@ -106,6 +106,8 @@ class OOFEMBCDialog(QtWidgets.QDialog):
 
     def _template_index(self, oofem_type):
         expected = str(oofem_type or "").lower()
+        if expected == "displacement":
+            expected = "boundarycondition"
         return next(
             (
                 index
@@ -161,8 +163,8 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             return
         existing_matches = (
             self._existing_bc
-            and str(self._existing_bc.get("oofem_type") or "").lower()
-            == str(template.get("oofem_name") or "").lower()
+            and self._template_index(self._existing_bc.get("oofem_type"))
+            == self._template_index(template.get("oofem_name"))
         )
         for parameter in template.get("params", []):
             row = self.parameterTable.rowCount()

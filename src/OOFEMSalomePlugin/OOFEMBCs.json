@@ -10,8 +10,8 @@
       ]
     },
     {
-      "oofem_name": "Displacement",
-      "display_name": "Nodal Displacement",
+      "oofem_name": "BoundaryCondition",
+      "display_name": "Dirichlet Condition (Prescribed DOFs)",
       "apply_to": "nodes",
       "params": [
         {"key": "dofs", "name": "DOFs", "type": "int_list", "default": [1], "description": "Comma-separated prescribed degrees of freedom (1=x, 2=y, 3=z)."},
