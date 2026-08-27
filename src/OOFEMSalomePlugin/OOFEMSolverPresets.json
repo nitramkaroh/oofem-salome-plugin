@@ -19,6 +19,13 @@
       "description": "Displacement and stress fields plus the contact gap, pressure, and status fields, written as VTK output. Used automatically once a contact is present.",
       "vtk": true,
       "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 4 1 150 151 152"
+    },
+    {
+      "id": "custom",
+      "display_name": "Custom VTK output",
+      "description": "User-defined VTK export module configuration with customized variables.",
+      "vtk": true,
+      "vtk_record": "vtkxml tstep_all domain_all primvars 1 1 cellvars 1 1"
     }
   ]
 }

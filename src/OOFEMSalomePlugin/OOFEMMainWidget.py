@@ -17,6 +17,12 @@ from OOFEMSalomePlugin.OOFEMProject import (
     PROJECT_SCHEMA_VERSION,
     migrate_project_state,
 )
+from OOFEMSalomePlugin.OOFEMExportVariableDialog import OOFEMExportVariableDialog
+from OOFEMSalomePlugin.OOFEMExportCatalog import (
+    default_variables_for_preset,
+    format_vtk_record,
+    describe_variable,
+)
 
 
 _Signal = getattr(QtCore, "pyqtSignal", None) or QtCore.Signal
@@ -149,23 +155,72 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         # Add the new tab to the main tab widget
         self.tabs.addTab(time_tab, "Time Functions")
 
-        # Tab: which fields (if any) OOFEM writes as VTK output. Everything
-        # about the solver itself (engineering model, iteration controls)
-        # lives on the Analysis tab; nlgeo lives on the Cross Sections tab.
+        # Tab: Export Modules (which fields and modules OOFEM exports).
         post_tab = QtWidgets.QWidget()
         post_layout = QtWidgets.QVBoxLayout(post_tab)
         output_form = QtWidgets.QFormLayout()
         self.outputFormCombo = QtWidgets.QComboBox()
-        self.outputFormCombo.currentIndexChanged.connect(self._solverSettingsChanged)
-        output_form.addRow("Output:", self.outputFormCombo)
+        self.outputFormCombo.currentIndexChanged.connect(self._onOutputFormPresetChanged)
+        output_form.addRow("Preset / Output Mode:", self.outputFormCombo)
         post_layout.addLayout(output_form)
         post_note = QtWidgets.QLabel(
-            "Choose whether OOFEM writes VTK output alongside the standard "
-            "text output, and which fields it contains."
+            "Configure OOFEM export modules (e.g. VTK XML). Add, edit, or remove primary "
+            "and internal variables to customize exported fields."
         )
         post_note.setWordWrap(True)
         post_layout.addWidget(post_note)
-        post_layout.addStretch()
+
+        # Toolbar for export variables
+        export_btn_layout = QtWidgets.QHBoxLayout()
+        self.addExportVarBtn = QtWidgets.QPushButton("Add Variable")
+        self.addExportVarBtn.clicked.connect(self.addExportVariable)
+        self.editExportVarBtn = QtWidgets.QPushButton("Edit Variable")
+        self.editExportVarBtn.clicked.connect(self.editExportVariable)
+        self.removeExportVarBtn = QtWidgets.QPushButton("Remove Variable")
+        self.removeExportVarBtn.clicked.connect(self.removeExportVariable)
+        self.resetExportVarBtn = QtWidgets.QPushButton("Reset to Preset")
+        self.resetExportVarBtn.clicked.connect(self.resetExportVariables)
+
+        export_btn_layout.addWidget(self.addExportVarBtn)
+        export_btn_layout.addWidget(self.editExportVarBtn)
+        export_btn_layout.addWidget(self.removeExportVarBtn)
+        export_btn_layout.addWidget(self.resetExportVarBtn)
+        post_layout.addLayout(export_btn_layout)
+
+        # Export variables table
+        self.exportVarTable = QtWidgets.QTableWidget()
+        self.exportVarTable.setColumnCount(4)
+        self.exportVarTable.setHorizontalHeaderLabels(
+            ["Category", "Variable Name", "ID", "Description"]
+        )
+        self.exportVarTable.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.exportVarTable.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.exportVarTable.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.exportVarTable.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.exportVarTable.horizontalHeader().setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.exportVarTable.horizontalHeader().setSectionResizeMode(
+            3, QtWidgets.QHeaderView.Stretch
+        )
+        self.exportVarTable.doubleClicked.connect(self.editExportVariable)
+        post_layout.addWidget(self.exportVarTable)
+
+        # Live command preview
+        preview_group = QtWidgets.QGroupBox("Export Module Command Preview")
+        preview_layout = QtWidgets.QVBoxLayout(preview_group)
+        self.exportPreviewEdit = QtWidgets.QLineEdit()
+        self.exportPreviewEdit.setReadOnly(True)
+        preview_layout.addWidget(self.exportPreviewEdit)
+        post_layout.addWidget(preview_group)
 
         # Tab 1: Element Mapping
         elem_tab = QtWidgets.QWidget()
@@ -176,7 +231,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.elemTable.cellChanged.connect(self.onElementMappingChanged)
         elem_layout.addWidget(self.elemTable)
         self.tabs.addTab(elem_tab, "Element Mapping")
-        self.tabs.addTab(post_tab, "Export")
+        self.tabs.addTab(post_tab, "Export Modules")
 
         # Tab 2: Materials
         mat_tab = QtWidgets.QWidget()
@@ -704,7 +759,10 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         self.inputFileEdit.setText(self.state["last_input_file"])
         preset_index = self.outputFormCombo.findData(self.state["solver_preset"])
         if preset_index >= 0:
+            self._block_signals = True
             self.outputFormCombo.setCurrentIndex(preset_index)
+            self._block_signals = False
+        self.populateExportVariables()
         self._ensureContactSolverSetup()
         self.last_export_file = self.state["last_input_file"]
         self.refreshRunHistory()
@@ -2029,6 +2087,148 @@ class OOFEMMainWidget(QtWidgets.QWidget):
 
 
     # ---------------------------
+    # Export modules / variables
+    # ---------------------------
+    def _onOutputFormPresetChanged(self, index=None):
+        del index
+        if self._block_signals or not isinstance(self.state, dict):
+            return
+        preset = self.outputFormCombo.currentData()
+        if preset == "text-only":
+            self.state["export_variables"] = []
+        elif preset in ("vtk", "contact-vtk"):
+            self.state["export_variables"] = default_variables_for_preset(preset)
+        self.populateExportVariables()
+        self._solverSettingsChanged()
+
+    def populateExportVariables(self):
+        preset = self.outputFormCombo.currentData()
+        is_text_only = preset == "text-only"
+
+        # Enable / disable variable controls based on mode
+        self.addExportVarBtn.setEnabled(not is_text_only)
+        self.editExportVarBtn.setEnabled(not is_text_only)
+        self.removeExportVarBtn.setEnabled(not is_text_only)
+        self.resetExportVarBtn.setEnabled(not is_text_only)
+        self.exportVarTable.setEnabled(not is_text_only)
+
+        self._block_signals = True
+        self.exportVarTable.setRowCount(0)
+
+        variables = self.state.get("export_variables", [])
+        if is_text_only:
+            self.exportPreviewEdit.setText("(No export modules - text output only)")
+            self._block_signals = False
+            return
+
+        category_labels = {
+            "primvars": "Primary (primvars)",
+            "vars": "Internal - Smoothed (vars)",
+            "cellvars": "Internal - Cell (cellvars)",
+            "ipvars": "Internal - IP (ipvars)",
+        }
+
+        for var in variables:
+            if not isinstance(var, dict):
+                continue
+            row = self.exportVarTable.rowCount()
+            self.exportVarTable.insertRow(row)
+
+            cat = str(var.get("category", "cellvars")).lower()
+            cat_label = category_labels.get(cat, cat)
+            var_name = str(var.get("name", "Unknown"))
+            var_id = str(var.get("id", ""))
+            var_desc = str(var.get("description", ""))
+
+            cat_item = QtWidgets.QTableWidgetItem(cat_label)
+            cat_item.setData(Qt.UserRole, cat)
+            name_item = QtWidgets.QTableWidgetItem(var_name)
+            id_item = QtWidgets.QTableWidgetItem(var_id)
+            desc_item = QtWidgets.QTableWidgetItem(var_desc)
+
+            self.exportVarTable.setItem(row, 0, cat_item)
+            self.exportVarTable.setItem(row, 1, name_item)
+            self.exportVarTable.setItem(row, 2, id_item)
+            self.exportVarTable.setItem(row, 3, desc_item)
+
+        record_preview = format_vtk_record(variables) if variables else "(No variables selected)"
+        self.exportPreviewEdit.setText(record_preview)
+        self._block_signals = False
+
+    def _selectedExportVariableIndex(self):
+        selected_rows = sorted({item.row() for item in self.exportVarTable.selectedItems()})
+        if not selected_rows:
+            return None
+        return selected_rows[0]
+
+    def addExportVariable(self):
+        data = OOFEMExportVariableDialog.run(parent=self)
+        if data:
+            self.state.setdefault("export_variables", []).append(data)
+            custom_index = self.outputFormCombo.findData("custom")
+            if custom_index >= 0 and self.outputFormCombo.currentData() != "custom":
+                self._block_signals = True
+                self.outputFormCombo.setCurrentIndex(custom_index)
+                self._block_signals = False
+            self.populateExportVariables()
+            self._solverSettingsChanged()
+
+    def editExportVariable(self, *unused):
+        del unused
+        index = self._selectedExportVariableIndex()
+        variables = self.state.get("export_variables", [])
+        if index is None or index < 0 or index >= len(variables):
+            QtWidgets.QMessageBox.warning(
+                self, "Export Variable", "Select an export variable to edit."
+            )
+            return
+        existing = variables[index]
+        data = OOFEMExportVariableDialog.run(existing_variable=existing, parent=self)
+        if data:
+            variables[index] = data
+            custom_index = self.outputFormCombo.findData("custom")
+            if custom_index >= 0 and self.outputFormCombo.currentData() != "custom":
+                self._block_signals = True
+                self.outputFormCombo.setCurrentIndex(custom_index)
+                self._block_signals = False
+            self.populateExportVariables()
+            self._solverSettingsChanged()
+
+    def removeExportVariable(self):
+        selected_rows = sorted(
+            {item.row() for item in self.exportVarTable.selectedItems()}, reverse=True
+        )
+        variables = self.state.get("export_variables", [])
+        if not selected_rows:
+            QtWidgets.QMessageBox.warning(
+                self, "Export Variable", "Select variable(s) to remove."
+            )
+            return
+        for row in selected_rows:
+            if 0 <= row < len(variables):
+                del variables[row]
+        custom_index = self.outputFormCombo.findData("custom")
+        if custom_index >= 0 and self.outputFormCombo.currentData() != "custom":
+            self._block_signals = True
+            self.outputFormCombo.setCurrentIndex(custom_index)
+            self._block_signals = False
+        self.populateExportVariables()
+        self._solverSettingsChanged()
+
+    def resetExportVariables(self):
+        preset = self.outputFormCombo.currentData()
+        if preset in ("custom", "text-only", None):
+            preset = "vtk"
+            idx = self.outputFormCombo.findData("vtk")
+            if idx >= 0:
+                self._block_signals = True
+                self.outputFormCombo.setCurrentIndex(idx)
+                self._block_signals = False
+        self.state["export_variables"] = default_variables_for_preset(preset)
+        self.populateExportVariables()
+        self._solverSettingsChanged()
+
+    # ---------------------------
     # Export / solve
     # ---------------------------
     def _solverSettingsChanged(self, *unused, **options):
@@ -2039,6 +2239,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             "oofem_executable": self.oofemExecutableEdit.text().strip(),
             "last_input_file": self.inputFileEdit.text().strip(),
         }
+        if "export_variables" in self.state:
+            values["vtk_record"] = format_vtk_record(self.state["export_variables"])
         changed = any(self.state.get(key) != value for key, value in values.items())
         self.state.update(values)
         if changed and options.get("notify", True):
@@ -2048,7 +2250,15 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     def _selectedSolverSettings(self, output_directory=None):
         from OOFEMSalomePlugin.OOFEMConfig import solver_settings
 
-        settings = solver_settings(self.outputFormCombo.currentData())
+        preset = self.outputFormCombo.currentData()
+        variables = self.state.get("export_variables")
+        if preset == "text-only":
+            settings = solver_settings(preset_id="text-only")
+        elif variables:
+            settings = solver_settings(preset_id=preset, variables=variables)
+        else:
+            settings = solver_settings(preset_id=preset)
+
         results_directory = output_directory
         if results_directory is None:
             results_directory = os.environ.get(

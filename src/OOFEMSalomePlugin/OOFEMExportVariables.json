@@ -1,0 +1,859 @@
+{
+  "_comment": "Auto-generated catalog of OOFEM primary unknowns and internal state variables.",
+  "categories": {
+    "primvars": {
+      "keyword": "primvars",
+      "display_name": "Primary Variable (primvars)",
+      "description": "Primary unknowns (displacements, temperatures, etc.) evaluated at nodes.",
+      "source_type": "primary"
+    },
+    "vars": {
+      "keyword": "vars",
+      "display_name": "Internal Variable - Nodal smoothed (vars)",
+      "description": "Internal state variables (stresses, strains, etc.) smoothed and mapped to nodes.",
+      "source_type": "internal"
+    },
+    "cellvars": {
+      "keyword": "cellvars",
+      "display_name": "Internal Variable - Element / Cell (cellvars)",
+      "description": "Internal variables evaluated and stored per element (cell) without smoothing.",
+      "source_type": "internal"
+    },
+    "ipvars": {
+      "keyword": "ipvars",
+      "display_name": "Internal Variable - Integration Point (ipvars)",
+      "description": "Internal variables evaluated directly at integration points.",
+      "source_type": "internal"
+    }
+  },
+  "primary_variables": [
+    {
+      "id": 1,
+      "name": "DisplacementVector",
+      "description": "Nodal displacement vector (u, v, w)"
+    },
+    {
+      "id": 2,
+      "name": "GeneralizedDisplacementVector",
+      "description": "Generalized nodal displacement / rotational vector"
+    },
+    {
+      "id": 3,
+      "name": "FluxVector",
+      "description": "Flux vector"
+    },
+    {
+      "id": 4,
+      "name": "VelocityVector",
+      "description": "Velocity vector"
+    },
+    {
+      "id": 5,
+      "name": "PressureVector",
+      "description": "Pressure vector"
+    },
+    {
+      "id": 6,
+      "name": "Temperature",
+      "description": "Temperature field"
+    },
+    {
+      "id": 7,
+      "name": "Humidity",
+      "description": "Relative humidity field"
+    },
+    {
+      "id": 8,
+      "name": "EigenVector",
+      "description": "Modal eigen vector"
+    },
+    {
+      "id": 15,
+      "name": "DirectorField",
+      "description": "Director vector field"
+    },
+    {
+      "id": 16,
+      "name": "DeplanationFunction",
+      "description": "Deplanation warping function"
+    },
+    {
+      "id": 17,
+      "name": "MacroSlipVector",
+      "description": "Macro slip vector"
+    },
+    {
+      "id": 18,
+      "name": "ResidualForce",
+      "description": "Residual force vector"
+    },
+    {
+      "id": 19,
+      "name": "Concentration",
+      "description": "Species concentration"
+    }
+  ],
+  "internal_variables": [
+    {
+      "id": 1,
+      "name": "IST_StressTensor",
+      "description": "Stress tensor (Voigt notation)"
+    },
+    {
+      "id": 2,
+      "name": "IST_PrincipalStressTensor",
+      "description": "Principal stress tensor"
+    },
+    {
+      "id": 3,
+      "name": "IST_PrincipalStressTempTensor",
+      "description": "Temperature-dependent principal stress tensor"
+    },
+    {
+      "id": 4,
+      "name": "IST_StrainTensor",
+      "description": "Total strain tensor (Voigt notation)"
+    },
+    {
+      "id": 5,
+      "name": "IST_PrincipalStrainTensor",
+      "description": "Principal strain tensor"
+    },
+    {
+      "id": 6,
+      "name": "IST_PrincipalStrainTempTensor",
+      "description": "Temperature-dependent principal strain tensor"
+    },
+    {
+      "id": 7,
+      "name": "IST_BeamForceMomentTensor",
+      "description": "Beam generalized internal forces and moments (N, Vy, Vz, Mx, My, Mz)"
+    },
+    {
+      "id": 8,
+      "name": "IST_BeamStrainCurvatureTensor",
+      "description": "Beam generalized strains and curvatures (eps, gam_y, gam_z, kap_x, kap_y, kap_z)"
+    },
+    {
+      "id": 9,
+      "name": "IST_ShellMomentTensor",
+      "description": "Shell bending and twisting moments (Mx, My, Mxy)"
+    },
+    {
+      "id": 10,
+      "name": "IST_ShellForceTensor",
+      "description": "Shell in-plane membrane forces (Nx, Ny, Nxy)"
+    },
+    {
+      "id": 11,
+      "name": "IST_CurvatureTensor",
+      "description": "Plate/shell curvature tensor"
+    },
+    {
+      "id": 12,
+      "name": "IST_DisplacementVector",
+      "description": "Internal displacement vector"
+    },
+    {
+      "id": 13,
+      "name": "IST_DamageTensor",
+      "description": "Anisotropic damage tensor"
+    },
+    {
+      "id": 14,
+      "name": "IST_DamageInvTensor",
+      "description": "Inverse damage tensor"
+    },
+    {
+      "id": 15,
+      "name": "IST_PrincipalDamageTensor",
+      "description": "Principal damage tensor"
+    },
+    {
+      "id": 16,
+      "name": "IST_PrincipalDamageTempTensor",
+      "description": "Principal damage temp tensor"
+    },
+    {
+      "id": 17,
+      "name": "IST_CrackState",
+      "description": "Crack state identifier"
+    },
+    {
+      "id": 18,
+      "name": "IST_StressTensorTemp",
+      "description": "Stress tensor temp"
+    },
+    {
+      "id": 19,
+      "name": "IST_StrainTensorTemp",
+      "description": "Strain tensor temp"
+    },
+    {
+      "id": 20,
+      "name": "IST_ShellForceTensorTemp",
+      "description": "Shell force tensor temp"
+    },
+    {
+      "id": 21,
+      "name": "IST_ShellMomentTensorTemp",
+      "description": "Shell moment tensor temp"
+    },
+    {
+      "id": 22,
+      "name": "IST_CurvatureTensorTemp",
+      "description": "Curvature tensor temp"
+    },
+    {
+      "id": 23,
+      "name": "IST_DisplacementVectorTemp",
+      "description": "Displacement vector temp"
+    },
+    {
+      "id": 24,
+      "name": "IST_DamageTensorTemp",
+      "description": "Damage tensor temp"
+    },
+    {
+      "id": 25,
+      "name": "IST_DamageInvTensorTemp",
+      "description": "Damage inv tensor temp"
+    },
+    {
+      "id": 26,
+      "name": "IST_CrackStateTemp",
+      "description": "Crack state temp"
+    },
+    {
+      "id": 27,
+      "name": "IST_PlasticStrainTensor",
+      "description": "Plastic strain tensor"
+    },
+    {
+      "id": 28,
+      "name": "IST_PrincipalPlasticStrainTensor",
+      "description": "Principal plastic strain tensor"
+    },
+    {
+      "id": 29,
+      "name": "IST_CylindricalStressTensor",
+      "description": "Stress tensor in cylindrical coordinate system"
+    },
+    {
+      "id": 30,
+      "name": "IST_CylindricalStrainTensor",
+      "description": "Strain tensor in cylindrical coordinate system"
+    },
+    {
+      "id": 31,
+      "name": "IST_MaxEquivalentStrainLevel",
+      "description": "Maximum historical equivalent strain level"
+    },
+    {
+      "id": 32,
+      "name": "IST_ErrorIndicatorLevel",
+      "description": "Zienkiewicz-Zhu error indicator level"
+    },
+    {
+      "id": 33,
+      "name": "IST_InternalStressError",
+      "description": "Internal stress error"
+    },
+    {
+      "id": 34,
+      "name": "IST_PrimaryUnknownError",
+      "description": "Primary unknown error"
+    },
+    {
+      "id": 35,
+      "name": "IST_RelMeshDensity",
+      "description": "Relative mesh density"
+    },
+    {
+      "id": 36,
+      "name": "IST_MicroplaneDamageValues",
+      "description": "Microplane damage variables"
+    },
+    {
+      "id": 37,
+      "name": "IST_Temperature",
+      "description": "Temperature state"
+    },
+    {
+      "id": 38,
+      "name": "IST_MassConcentration_1",
+      "description": "Primary mass concentration"
+    },
+    {
+      "id": 39,
+      "name": "IST_HydrationDegree",
+      "description": "Degree of hydration (concrete)"
+    },
+    {
+      "id": 40,
+      "name": "IST_Humidity",
+      "description": "Relative humidity state"
+    },
+    {
+      "id": 41,
+      "name": "IST_Velocity",
+      "description": "Velocity state"
+    },
+    {
+      "id": 42,
+      "name": "IST_Pressure",
+      "description": "Pore/fluid pressure state"
+    },
+    {
+      "id": 43,
+      "name": "IST_VOFFraction",
+      "description": "VOF fraction"
+    },
+    {
+      "id": 44,
+      "name": "IST_Density",
+      "description": "Material density"
+    },
+    {
+      "id": 45,
+      "name": "IST_MaterialInterfaceVal",
+      "description": "Material interface value"
+    },
+    {
+      "id": 46,
+      "name": "IST_MaterialNumber",
+      "description": "Active material ID index"
+    },
+    {
+      "id": 47,
+      "name": "IST_ElementNumber",
+      "description": "Active element ID index"
+    },
+    {
+      "id": 48,
+      "name": "IST_BoneVolumeFraction",
+      "description": "Bone volume fraction"
+    },
+    {
+      "id": 49,
+      "name": "IST_PlasStrainEnerDens",
+      "description": "Plastic strain energy density"
+    },
+    {
+      "id": 50,
+      "name": "IST_ElasStrainEnerDens",
+      "description": "Elastic strain energy density"
+    },
+    {
+      "id": 51,
+      "name": "IST_TotalStrainEnerDens",
+      "description": "Total strain energy density"
+    },
+    {
+      "id": 52,
+      "name": "IST_DamageScalar",
+      "description": "Isotropic scalar damage parameter (0 = intact, 1 = fully damaged)"
+    },
+    {
+      "id": 53,
+      "name": "IST_MaterialOrientation_x",
+      "description": "Local material orientation vector X"
+    },
+    {
+      "id": 54,
+      "name": "IST_MaterialOrientation_y",
+      "description": "Local material orientation vector Y"
+    },
+    {
+      "id": 55,
+      "name": "IST_MaterialOrientation_z",
+      "description": "Local material orientation vector Z"
+    },
+    {
+      "id": 56,
+      "name": "IST_TemperatureFlow",
+      "description": "Heat flow vector"
+    },
+    {
+      "id": 57,
+      "name": "IST_MassConcentrationFlow_1",
+      "description": "Mass concentration flow 1"
+    },
+    {
+      "id": 58,
+      "name": "IST_HumidityFlow",
+      "description": "Humidity flow"
+    },
+    {
+      "id": 59,
+      "name": "IST_CrackStatuses",
+      "description": "Individual crack status indicators"
+    },
+    {
+      "id": 60,
+      "name": "IST_CrackedFlag",
+      "description": "Cracking initiation flag (0/1)"
+    },
+    {
+      "id": 61,
+      "name": "IST_CrackDirs",
+      "description": "Crack plane normal directions"
+    },
+    {
+      "id": 62,
+      "name": "IST_CumPlasticStrain",
+      "description": "Cumulative equivalent plastic strain (kappa)"
+    },
+    {
+      "id": 63,
+      "name": "IST_CumPlasticStrain_2",
+      "description": "Cumulative plastic strain 2"
+    },
+    {
+      "id": 64,
+      "name": "IST_StressWorkDensity",
+      "description": "Stress work density"
+    },
+    {
+      "id": 65,
+      "name": "IST_DissWorkDensity",
+      "description": "Dissipated energy density"
+    },
+    {
+      "id": 66,
+      "name": "IST_FreeEnergyDensity",
+      "description": "Helmholtz free energy density"
+    },
+    {
+      "id": 67,
+      "name": "IST_ThermalConductivityIsotropic",
+      "description": "Isotropic thermal conductivity"
+    },
+    {
+      "id": 68,
+      "name": "IST_HeatCapacity",
+      "description": "Specific heat capacity"
+    },
+    {
+      "id": 69,
+      "name": "IST_AverageTemperature",
+      "description": "Average temperature"
+    },
+    {
+      "id": 70,
+      "name": "IST_YoungModulusVirginPaste",
+      "description": "Young modulus virgin paste"
+    },
+    {
+      "id": 71,
+      "name": "IST_PoissonRatioVirginPaste",
+      "description": "Poisson ratio virgin paste"
+    },
+    {
+      "id": 72,
+      "name": "IST_YoungModulusConcrete",
+      "description": "Young modulus concrete"
+    },
+    {
+      "id": 73,
+      "name": "IST_PoissonRatioConcrete",
+      "description": "Poisson ratio concrete"
+    },
+    {
+      "id": 74,
+      "name": "IST_VolumetricPlasticStrain",
+      "description": "Volumetric plastic strain component"
+    },
+    {
+      "id": 75,
+      "name": "IST_DeviatoricStrain",
+      "description": "Deviatoric strain tensor"
+    },
+    {
+      "id": 76,
+      "name": "IST_DeviatoricStress",
+      "description": "Deviatoric stress tensor"
+    },
+    {
+      "id": 77,
+      "name": "IST_Viscosity",
+      "description": "Dynamic viscosity"
+    },
+    {
+      "id": 78,
+      "name": "IST_CharacteristicLength",
+      "description": "Characteristic length"
+    },
+    {
+      "id": 79,
+      "name": "IST_DeviatoricStrainMeasure",
+      "description": "Deviatoric strain measure"
+    },
+    {
+      "id": 80,
+      "name": "IST_DeviatoricStressMeasure",
+      "description": "Deviatoric stress measure"
+    },
+    {
+      "id": 81,
+      "name": "IST_vonMisesStress",
+      "description": "von Mises equivalent stress"
+    },
+    {
+      "id": 82,
+      "name": "IST_CrackVector",
+      "description": "Crack opening displacement vector"
+    },
+    {
+      "id": 83,
+      "name": "IST_PressureGradient",
+      "description": "Pressure gradient vector"
+    },
+    {
+      "id": 84,
+      "name": "IST_DissWork",
+      "description": "Total dissipated energy"
+    },
+    {
+      "id": 85,
+      "name": "IST_DeltaDissWork",
+      "description": "Delta dissipated work"
+    },
+    {
+      "id": 86,
+      "name": "IST_StressCapPos",
+      "description": "Stress cap position"
+    },
+    {
+      "id": 87,
+      "name": "IST_TangentNorm",
+      "description": "Tangent norm"
+    },
+    {
+      "id": 88,
+      "name": "IST_Tangent",
+      "description": "Tangent"
+    },
+    {
+      "id": 89,
+      "name": "IST_DirectorField",
+      "description": "Director field"
+    },
+    {
+      "id": 90,
+      "name": "IST_CrackWidth",
+      "description": "Crack opening width"
+    },
+    {
+      "id": 91,
+      "name": "IST_DeformationGradientTensor",
+      "description": "Deformation gradient tensor (F)"
+    },
+    {
+      "id": 92,
+      "name": "IST_FirstPKStressTensor",
+      "description": "First Piola-Kirchhoff stress tensor (P)"
+    },
+    {
+      "id": 93,
+      "name": "IST_XFEMEnrichment",
+      "description": "XFEM enrichment"
+    },
+    {
+      "id": 94,
+      "name": "IST_XFEMNumIntersecPoints",
+      "description": "XFEM number of intersection points"
+    },
+    {
+      "id": 95,
+      "name": "IST_XFEMLevelSetPhi",
+      "description": "XFEM level set phi"
+    },
+    {
+      "id": 96,
+      "name": "IST_Maturity",
+      "description": "Concrete equivalent age / maturity"
+    },
+    {
+      "id": 97,
+      "name": "IST_CauchyStressTensor",
+      "description": "True Cauchy stress tensor (sigma)"
+    },
+    {
+      "id": 98,
+      "name": "IST_InterfaceJump",
+      "description": "Interface displacement jump vector"
+    },
+    {
+      "id": 99,
+      "name": "IST_InterfaceTraction",
+      "description": "Interface traction vector"
+    },
+    {
+      "id": 100,
+      "name": "IST_InterfaceFirstPKTraction",
+      "description": "Interface first PK traction"
+    },
+    {
+      "id": 101,
+      "name": "IST_StressTensor_Reduced",
+      "description": "Stress tensor reduced"
+    },
+    {
+      "id": 102,
+      "name": "IST_StrainTensor_Reduced",
+      "description": "Strain tensor reduced"
+    },
+    {
+      "id": 103,
+      "name": "IST_CrossSectionNumber",
+      "description": "Active cross-section ID index"
+    },
+    {
+      "id": 104,
+      "name": "IST_ShellStrainTensor",
+      "description": "Shell middle surface strain tensor"
+    },
+    {
+      "id": 105,
+      "name": "IST_AbaqusStateVector",
+      "description": "Abaqus state vector"
+    },
+    {
+      "id": 106,
+      "name": "IST_AutogenousShrinkageTensor",
+      "description": "Autogenous shrinkage strain tensor"
+    },
+    {
+      "id": 107,
+      "name": "IST_DryingShrinkageTensor",
+      "description": "Drying shrinkage strain tensor"
+    },
+    {
+      "id": 108,
+      "name": "IST_TotalShrinkageTensor",
+      "description": "Total shrinkage strain tensor"
+    },
+    {
+      "id": 109,
+      "name": "IST_ThermalStrainTensor",
+      "description": "Thermal expansion strain tensor"
+    },
+    {
+      "id": 110,
+      "name": "IST_CreepStrainTensor",
+      "description": "Creep strain tensor"
+    },
+    {
+      "id": 111,
+      "name": "IST_TensileStrength",
+      "description": "Current tensile strength"
+    },
+    {
+      "id": 112,
+      "name": "IST_ResidualTensileStrength",
+      "description": "Residual tensile strength"
+    },
+    {
+      "id": 113,
+      "name": "IST_LocalEquivalentStrain",
+      "description": "Local equivalent strain"
+    },
+    {
+      "id": 114,
+      "name": "IST_CrackIndex",
+      "description": "Crack index identifier"
+    },
+    {
+      "id": 115,
+      "name": "IST_EigenStrainTensor",
+      "description": "Initial / Eigen strain tensor"
+    },
+    {
+      "id": 116,
+      "name": "IST_CrackStrainTensor",
+      "description": "Crack opening strain tensor"
+    },
+    {
+      "id": 117,
+      "name": "IST_2ndCrackWidth",
+      "description": "2nd crack width"
+    },
+    {
+      "id": 118,
+      "name": "IST_2ndCrackVector",
+      "description": "2nd crack vector"
+    },
+    {
+      "id": 119,
+      "name": "IST_3rdCrackWidth",
+      "description": "3rd crack width"
+    },
+    {
+      "id": 120,
+      "name": "IST_3rdCrackVector",
+      "description": "3rd crack vector"
+    },
+    {
+      "id": 121,
+      "name": "IST_FiberStressLocal",
+      "description": "Fiber stress local"
+    },
+    {
+      "id": 122,
+      "name": "IST_FiberStressNL",
+      "description": "Fiber stress non-linear"
+    },
+    {
+      "id": 123,
+      "name": "IST_EnergyMassCapacity",
+      "description": "Energy mass capacity"
+    },
+    {
+      "id": 124,
+      "name": "IST_PrincStressVector1",
+      "description": "Principal stress vector 1"
+    },
+    {
+      "id": 125,
+      "name": "IST_PrincStressVector2",
+      "description": "Principal stress vector 2"
+    },
+    {
+      "id": 126,
+      "name": "IST_PrincStressVector3",
+      "description": "Principal stress vector 3"
+    },
+    {
+      "id": 127,
+      "name": "IST_InterfaceNormal",
+      "description": "Interface normal vector"
+    },
+    {
+      "id": 128,
+      "name": "IST_MomentTensor",
+      "description": "Moment tensor"
+    },
+    {
+      "id": 129,
+      "name": "IST_MomentTensorTemp",
+      "description": "Moment tensor temp"
+    },
+    {
+      "id": 130,
+      "name": "IST_YieldStrength",
+      "description": "Current yield strength"
+    },
+    {
+      "id": 131,
+      "name": "IST_ElasticStrainTensor",
+      "description": "Elastic strain tensor"
+    },
+    {
+      "id": 132,
+      "name": "IST_MoistureContent",
+      "description": "Moisture content fraction"
+    },
+    {
+      "id": 133,
+      "name": "IST_CrackStatusesTemp",
+      "description": "Crack statuses temp"
+    },
+    {
+      "id": 134,
+      "name": "IST_CrackSlip",
+      "description": "Crack slip"
+    },
+    {
+      "id": 135,
+      "name": "IST_EquivalentTime",
+      "description": "Equivalent time"
+    },
+    {
+      "id": 136,
+      "name": "IST_IncrementCreepModulus",
+      "description": "Increment creep modulus"
+    },
+    {
+      "id": 137,
+      "name": "IST_NormalStress",
+      "description": "Normal stress component"
+    },
+    {
+      "id": 138,
+      "name": "IST_LatticeStrain",
+      "description": "Lattice strain"
+    },
+    {
+      "id": 139,
+      "name": "IST_LatticeStress",
+      "description": "Lattice stress"
+    },
+    {
+      "id": 140,
+      "name": "IST_PlasticLatticeStrain",
+      "description": "Plastic lattice strain"
+    },
+    {
+      "id": 141,
+      "name": "IST_InternalSource",
+      "description": "Internal source"
+    },
+    {
+      "id": 142,
+      "name": "IST_MacroSlipVector",
+      "description": "Macro slip vector"
+    },
+    {
+      "id": 143,
+      "name": "IST_TransferStress",
+      "description": "Transfer stress"
+    },
+    {
+      "id": 144,
+      "name": "IST_MacroSlipGradient",
+      "description": "Macro slip gradient"
+    },
+    {
+      "id": 145,
+      "name": "IST_ReinfMembraneStress",
+      "description": "Reinforcement membrane stress"
+    },
+    {
+      "id": 146,
+      "name": "IST_VolumeFraction",
+      "description": "Volume fraction"
+    },
+    {
+      "id": 147,
+      "name": "IST_X_LCS",
+      "description": "Local LCS X unit vector"
+    },
+    {
+      "id": 148,
+      "name": "IST_Y_LCS",
+      "description": "Local LCS Y unit vector"
+    },
+    {
+      "id": 149,
+      "name": "IST_Z_LCS",
+      "description": "Local LCS Z unit vector"
+    },
+    {
+      "id": 150,
+      "name": "IST_ContactGap",
+      "description": "Contact normal separation / gap"
+    },
+    {
+      "id": 151,
+      "name": "IST_ContactPressure",
+      "description": "Contact normal pressure"
+    },
+    {
+      "id": 152,
+      "name": "IST_ContactStatus",
+      "description": "Contact interaction status (0 = open, 1 = stick, 2 = slip)"
+    }
+  ]
+}
+

@@ -2013,7 +2013,7 @@ class OOFEMExporter:
             )
             return errors
 
-        for keyword in ("primvars", "cellvars"):
+        for keyword in ("primvars", "vars", "cellvars", "ipvars"):
             for index, token in enumerate(tokens):
                 if token.lower() != keyword:
                     continue

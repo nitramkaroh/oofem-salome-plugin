@@ -56,6 +56,20 @@ def new_project_state():
         "element_mapping": {},
         "selected_mesh_id": "",
         "solver_preset": "vtk",
+        "export_variables": [
+            {
+                "category": "primvars",
+                "id": 1,
+                "name": "DisplacementVector",
+                "description": "Nodal displacement vector (u, v, w)",
+            },
+            {
+                "category": "cellvars",
+                "id": 1,
+                "name": "IST_StressTensor",
+                "description": "Stress tensor (Voigt notation)",
+            },
+        ],
         "oofem_executable": "",
         "last_input_file": "",
         "last_run_id": "",
@@ -95,6 +109,25 @@ def _ensure_analysis(project):
         params = {}
         analysis["params"] = params
     params.setdefault("nsteps", 1)
+
+
+def _ensure_export_variables(project):
+    if "export_variables" in project and isinstance(project["export_variables"], list):
+        return
+    from OOFEMSalomePlugin.OOFEMExportCatalog import (
+        default_variables_for_preset,
+        parse_vtk_record,
+    )
+
+    if project.get("vtk_record"):
+        parsed = parse_vtk_record(project["vtk_record"])
+        if parsed:
+            project["export_variables"] = parsed
+            return
+
+    preset = project.get("solver_preset", "vtk")
+    project["export_variables"] = default_variables_for_preset(preset)
+
 
 
 def _ensure_time_functions(project):
@@ -496,6 +529,7 @@ def migrate_project_state(state):
     _migrate_initial_conditions(project)
     _migrate_contacts(project, time_function_id)
     _migrate_materials_and_cross_sections(project)
+    _ensure_export_variables(project)
     if materialize_nlgeo:
         for cross_section in project.get("cross_sections", []):
             if not isinstance(cross_section, dict):

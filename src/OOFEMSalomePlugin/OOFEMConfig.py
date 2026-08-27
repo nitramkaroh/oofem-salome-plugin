@@ -48,8 +48,13 @@ def load_solver_presets():
     return presets
 
 
-def solver_settings(preset_id=None):
-    """Resolve an output-form entry (VTK on/off + record) by id.
+def load_export_variable_catalog():
+    """Load the structured catalog of primary unknowns and internal state variables."""
+    return _load_object("OOFEMExportVariables.json")
+
+
+def solver_settings(preset_id=None, custom_record=None, variables=None):
+    """Resolve an output-form entry (VTK on/off + record) by id or custom settings.
 
     The engineering model and its numeric solution controls live on the
     Analysis tab now; this only ever carries output-form (concern c) keys.
@@ -58,6 +63,30 @@ def solver_settings(preset_id=None):
     selected = next(
         (preset for preset in presets if preset.get("id") == preset_id), presets[0]
     )
+
+    if preset_id == "text-only":
+        return {
+            "vtk": False,
+            "vtk_record": "",
+        }
+
+    # If explicit variables are provided, format them into the record
+    if variables is not None:
+        from OOFEMSalomePlugin.OOFEMExportCatalog import format_vtk_record
+
+        record = format_vtk_record(variables)
+        return {
+            "vtk": bool(variables),
+            "vtk_record": record,
+        }
+
+    # If explicit custom_record is provided
+    if custom_record and isinstance(custom_record, str) and custom_record.strip():
+        return {
+            "vtk": True,
+            "vtk_record": custom_record.strip(),
+        }
+
     return {
         "vtk": bool(selected.get("vtk", False)),
         "vtk_record": selected.get(
