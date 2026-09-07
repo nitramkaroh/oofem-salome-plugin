@@ -5,6 +5,7 @@ from OOFEMSalomePlugin.OOFEMParameterCoercion import (
     format_parameter_value as _format_value,
 )
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
+from OOFEMSalomePlugin.OOFEMParameterCoercion import parameter_tooltip
 
 
 class OOFEMBCDialog(QtWidgets.QDialog):
@@ -184,7 +185,7 @@ class OOFEMBCDialog(QtWidgets.QDialog):
             value_item = QtWidgets.QTableWidgetItem(
                 _format_value(value, parameter.get("type", "float"))
             )
-            description = parameter.get("description")
+            description = parameter_tooltip(parameter)
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)

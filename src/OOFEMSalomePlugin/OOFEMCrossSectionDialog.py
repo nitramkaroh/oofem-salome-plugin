@@ -5,6 +5,7 @@ from OOFEMSalomePlugin.OOFEMParameterCoercion import (
     format_parameter_value as _format_parameter,
 )
 from OOFEMSalomePlugin.OOFEMQt import Qt, QtWidgets
+from OOFEMSalomePlugin.OOFEMParameterCoercion import parameter_tooltip
 
 
 class OOFEMCrossSectionDialog(QtWidgets.QDialog):
@@ -232,7 +233,7 @@ class OOFEMCrossSectionDialog(QtWidgets.QDialog):
                 _format_parameter(value, parameter.get("type", "float"))
             )
 
-            description = parameter.get("description")
+            description = parameter_tooltip(parameter)
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)

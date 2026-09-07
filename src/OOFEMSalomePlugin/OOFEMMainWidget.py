@@ -7,6 +7,7 @@ from OOFEMSalomePlugin.OOFEMMapping import DEFAULT_ELEMENT_MAP
 from OOFEMSalomePlugin.OOFEMParameterCoercion import (
     coerce_parameter_value,
     format_parameter_value,
+    parameter_tooltip,
 )
 from OOFEMSalomePlugin.OOFEMMaterialDialog import OOFEMMaterialDialog
 from OOFEMSalomePlugin.OOFEMBCDialog import OOFEMBCDialog
@@ -1000,7 +1001,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                     value, parameter.get("type", "float")
                 )
             )
-            description = parameter.get("description")
+            description = parameter_tooltip(parameter)
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)
@@ -1464,8 +1465,8 @@ class OOFEMMainWidget(QtWidgets.QWidget):
             )
             name_item.setData(Qt.UserRole + 2, is_optional)
 
-            # Set tooltip if a description is available in the template
-            description = param_def.get("description")
+            # Own wording first, then the OOFEM manual when it adds to it
+            description = parameter_tooltip(param_def)
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)
@@ -1616,7 +1617,7 @@ class OOFEMMainWidget(QtWidgets.QWidget):
                 )
             )
 
-            description = param_def.get("description")
+            description = parameter_tooltip(param_def)
             if description:
                 name_item.setToolTip(description)
                 value_item.setToolTip(description)

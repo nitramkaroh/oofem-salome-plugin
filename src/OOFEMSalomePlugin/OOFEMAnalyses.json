@@ -89,6 +89,7 @@
           "type": "int",
           "default": 1,
           "description": "1 = direct control (Newton-Raphson load control), 0 = indirect cylindrical arc-length control. The two modes drive different OOFEM solvers, so their parameters are disjoint; arc-length control additionally requires Arc-Length Step.",
+          "doc_description": "The type of solution control used for corresponding meta step. if == 0 then indirect control will be used to control solution process (arc-length method, default). if == 1 then direct displacement or load control will be used (Newton-Raphson solver). In the later mode, one can apply the prescribed load increments as well as control displacements.",
           "optional": true
         },
         {
@@ -97,6 +98,7 @@
           "type": "int",
           "default": 0,
           "description": "0 = tangent stiffness, 1 = secant, 2 = initial elastic, 3 = secant updated per load step.",
+          "doc_description": "If == 0 (default) then tangent stiffness will be used at new step beginning and whenever numerical method will ask for stiffness update. If == 1 the use of secant tangent will be forced. The secant stiffness will be used at new step beginning and whenever numerical method will ask for stiffness update. If == 2 then original elastic stiffness will be used during the whole solution process.",
           "optional": true
         },
         {
@@ -113,6 +115,7 @@
           "type": "int",
           "default": 100,
           "description": "Maximum equilibrium iterations per solution step.",
+          "doc_description": "The maximum number of iteration allowed to reach equilibrium state. If this limit is reached, restart follows with smaller step length.",
           "optional": true
         },
         {
@@ -120,7 +123,8 @@
           "name": "Time Step",
           "type": "float",
           "optional": true,
-          "description": "Length of one solution step in the time-function argument."
+          "description": "Length of one solution step in the time-function argument.",
+          "doc_description": "Time step length. If not specified, it is set equal to 1,0. Each solution step has associated the corresponding intrinsic time, at which the loading is generated. The deltaT determines the spacing between solution steps on time scale."
         },
         {
           "key": "refloadmode",
@@ -134,21 +138,24 @@
           "name": "Modified NR Steps",
           "type": "int",
           "optional": true,
-          "description": "Number of iterations reusing the stiffness before it is reassembled (modified Newton-Raphson). 0 keeps the full method."
+          "description": "Number of iterations reusing the stiffness before it is reassembled (modified Newton-Raphson). 0 keeps the full method.",
+          "doc_description": "Forces the use of accelerated Newton Raphson method, where stiffness is updated after manrmsteps steps. By default, the modified NR method is used (no stiffness update)."
         },
         {
           "key": "miniter",
           "name": "Minimum Iterations",
           "type": "int",
           "optional": true,
-          "description": "Minimum equilibrium iterations forced per solution step."
+          "description": "Minimum equilibrium iterations forced per solution step.",
+          "doc_description": "Minimum number of iterations which always proceed during the iterative solution. reqIterations are set to be the same, MaxIter are increased if lower."
         },
         {
           "key": "minsteplength",
           "name": "Minimum Step Length",
           "type": "float",
           "optional": true,
-          "description": "Smallest admissible step length before the solver reports divergence."
+          "description": "Smallest admissible step length before the solver reports divergence.",
+          "doc_description": "Minimum step length. The step length will never be smaller. If convergence problems are encountered and step length cannot be decreased, computation terminates."
         },
         {
           "key": "updateelasticstiffnessflag",
@@ -169,14 +176,16 @@
           "name": "Initial Arc-Length Step",
           "type": "float",
           "optional": true,
-          "description": "Arc length of the first step. Indirect control only."
+          "description": "Arc length of the first step. Indirect control only.",
+          "doc_description": "The initial step length (the arc-length). If not provided, the maximum step length (determined by stepLength parameter) will be used as the value of initial step length."
         },
         {
           "key": "psi",
           "name": "Arc-Length Psi",
           "type": "float",
           "optional": true,
-          "description": "Weight of the load term in the arc-length constraint; 0 controls displacements only. Indirect control only."
+          "description": "Weight of the load term in the arc-length constraint; 0 controls displacements only. Indirect control only.",
+          "doc_description": "CALM Psi control parameter. For Psi = 0 displacement control is applied. For nonzero values the load control applies together with displacement control (ALM). For large Psi load control apply."
         },
         {
           "key": "reqiterations",

@@ -70,3 +70,32 @@ def format_parameter_value(value, parameter_type):
             if key in value
         )
     return str(value)
+
+
+def parameter_tooltip(parameter):
+    """Compose a parameter's tooltip from its own text and OOFEM's manual.
+
+    The hand-written ``description`` leads because it is phrased for someone
+    meeting the parameter in this plugin.  ``doc_description``, harvested from
+    the OOFEM manuals by tools/harvest_oofem_docs.py, follows when it says
+    something more -- which values a mode selects, what happens when a limit is
+    reached, which other parameter a default depends on.
+
+    Rich text so the two read as separate paragraphs; Qt renders it in tooltips.
+    """
+    own = (parameter.get("description") or "").strip()
+    manual = (parameter.get("doc_description") or "").strip()
+    if not manual:
+        return own
+    escape = _html_escape
+    if not own:
+        return "<p>{}</p><p><i>OOFEM manual</i></p>".format(escape(manual))
+    return (
+        "<p>{}</p><p><i>OOFEM manual:</i> {}</p>".format(escape(own), escape(manual))
+    )
+
+
+def _html_escape(text):
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )

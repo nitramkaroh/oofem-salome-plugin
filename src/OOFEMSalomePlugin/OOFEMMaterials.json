@@ -37,8 +37,8 @@
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 30000000000.0, "description": "Young's modulus of the undamaged elastic material."},
         {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.2, "description": "Dimensionless Poisson ratio."},
-        {"key": "e0", "name": "Strain at Damage Onset", "type": "float", "default": 0.0001, "description": "Equivalent strain at which damage begins (e0)."},
-        {"key": "ef", "name": "Fracturing Strain", "type": "float", "default": 0.001, "description": "Softening-law fracturing strain controlling post-peak decay (ef)."},
+        {"key": "e0", "name": "Strain at Damage Onset", "type": "float", "default": 0.0001, "description": "Equivalent strain at which damage begins (e0).", "doc_description": "Strain at peak stress (for damage laws 0,1,2,3), limit elastic strain (for damage law 4), characteristic strain (for damage law 5)."},
+        {"key": "ef", "name": "Fracturing Strain", "type": "float", "default": 0.001, "description": "Softening-law fracturing strain controlling post-peak decay (ef).", "doc_description": "Parameter controling ductility, has the meaning of strain (for damage laws 0 and 1)."},
         {"key": "equivstraintype", "name": "Equivalent Strain Type", "type": "int", "default": 0, "description": "0=Mazars, 1=Rankine (smooth), 3=von Mises, 4=Rankine (standard). See OOFEM idm1 documentation for the full list."},
         {"key": "damlaw", "name": "Softening Law", "type": "int", "default": 0, "description": "0=exponential, 1=linear, 3=Hordijk. See OOFEM idm1 documentation for the full list."},
         {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
@@ -51,8 +51,8 @@
       "params": [
         {"key": "E", "name": "Young's Modulus", "type": "float", "default": 210000000000.0, "description": "Young's modulus of the elastic material."},
         {"key": "nu", "name": "Poisson's Ratio", "type": "float", "default": 0.3, "description": "Dimensionless Poisson ratio."},
-        {"key": "sig0", "name": "Initial Yield Stress", "type": "float", "default": 250000000.0, "description": "Initial uniaxial yield stress (sig0)."},
-        {"key": "h", "name": "Hardening Modulus", "type": "float", "default": 0.0, "description": "Linear isotropic hardening modulus (H).", "optional": true},
+        {"key": "sig0", "name": "Initial Yield Stress", "type": "float", "default": 250000000.0, "description": "Initial uniaxial yield stress (sig0).", "doc_description": "Initial yield stress in uniaxial tension (compression) (Required if htype = 0, which is default)."},
+        {"key": "h", "name": "Hardening Modulus", "type": "float", "default": 0.0, "description": "Linear isotropic hardening modulus (H).", "doc_description": "Hardening modulus (can be negative in the case of plastic softening) (Required if htype = 0, which is default).", "optional": true},
         {"key": "omega_crit", "name": "Critical Damage", "type": "float", "default": 0.0, "description": "Maximum allowed damage coupled to plasticity; 0 disables damage.", "optional": true},
         {"key": "a", "name": "Damage-law Exponent", "type": "float", "default": 0.0, "description": "Exponent of the damage evolution law; only used with omega_crit > 0.", "optional": true},
         {"key": "d", "name": "Density", "type": "float", "default": 0.0, "description": "Mass density; zero is suitable for static analysis.", "optional": true},
