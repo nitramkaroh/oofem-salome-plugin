@@ -12,8 +12,12 @@ SALOME GUI, and opens native OOFEM VTK results in SALOME's integrated ParaView
 - Per-group continuum-element `nlgeo` control with inherit/on/off modes; a
   disjoint one-element SALOME assignment group provides individual-element
   control
-- Static structural, linear static, and eigenvalue-dynamic engineering models
-  with editable analysis parameters
+- Static structural, nonlinear static, linear static, and eigenvalue-dynamic
+  engineering models with editable analysis parameters
+- Explicit `NonLinearStatic` solution control: direct Newton-Raphson load
+  control or indirect cylindrical arc-length control, with stiffness mode,
+  tolerances, and iteration limits, and validation that keeps the two disjoint
+  parameter sets from being mixed
 - Constant and piecewise-linear load-time functions shared by loads and
   prescribed conditions
 - Multi-DOF displacements and nodal loads assigned to node groups
@@ -261,7 +265,7 @@ export SALOME_PLUGINS_PATH="$PWD${SALOME_PLUGINS_PATH:+:$SALOME_PLUGINS_PATH}"
 7. Add optional zero-valued structural initial-condition records in **Initial
    Conditions**. Nonzero displacement, velocity, and acceleration values wait
    for a supported transient engineering model and are rejected for the
-   currently available static/eigenvalue analyses.
+   currently available static/nonlinear-static/eigenvalue analyses.
 8. For contact, create two exterior edge groups in 2D or face groups in 3D,
    then add a pair in **Contacts**. The plugin switches **Analysis** to
    Static Structural with its contact solution controls and steers **Export**
@@ -500,9 +504,15 @@ dead weight, uniform temperature loads, and constant structural initial
 conditions are now implemented. Current-OOFEM 2D/3D penalty contact is also
 implemented with automatic solver setup. The next priorities are:
 
-1. **Nonlinear and transient analyses** — nonlinear solution controls,
-   `DIIDynamic`/transient dynamics, physically exercised velocity and
-   acceleration initial conditions, and restart/checkpoint support.
+1. **Transient analyses** — `DIIDynamic`/transient dynamics, physically
+   exercised velocity and acceleration initial conditions, and
+   restart/checkpoint support. `NonLinearStatic` solution control is now
+   implemented for both direct Newton-Raphson load control and indirect
+   cylindrical arc-length control. Note that OOFEM treats the load reached at
+   each `NonLinearStatic` step as that step's load *increment*, so a constant
+   load history accumulates to `nsteps` times the reference load; drive the
+   model with a load history whose per-step increments trace the intended
+   path.
 2. **Broader OOFEM records** — thermal gradients for beam/plate/shell
    families, more cross sections, materials, elements, coupled-field records,
    and capability-gated advanced contact/search/result options. Each addition

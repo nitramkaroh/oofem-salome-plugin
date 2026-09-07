@@ -784,6 +784,43 @@ class OOFEMMainWidget(QtWidgets.QWidget):
     # ---------------------------
     # Mesh selector
     # ---------------------------
+    def _smeshChildren(self, smesh_comp):
+        """Iterate the whole SMESH subtree of the study."""
+        child_iterator = self.study.NewChildIterator(smesh_comp)
+        try:
+            # SALOMEDS defaults to direct children. Meshes can live in
+            # user-created study folders, so request the complete
+            # component subtree when the iterator supports it.
+            child_iterator.InitEx(True)
+        except AttributeError:
+            # Lightweight test doubles and very old SALOME clients may
+            # only expose the direct-child iterator API.
+            pass
+        while child_iterator.More():
+            yield child_iterator.Value()
+            child_iterator.Next()
+
+    def _collectMeshes(self, smesh_comp):
+        """Return (name, entry) for every live mesh in the SMESH subtree."""
+        found = []
+        for s_object in self._smeshChildren(smesh_comp):
+            mesh_object = s_object.GetObject()
+            if (
+                mesh_object is not None
+                and hasattr(mesh_object, "GetGroups")
+                and hasattr(mesh_object, "GetNodesId")
+            ):
+                found.append((s_object.GetName(), s_object.GetID()))
+        return found
+
+    def _smeshSubtreeIsDormant(self, smesh_comp):
+        """True when the subtree holds entries but none of them is live yet."""
+        for s_object in self._smeshChildren(smesh_comp):
+            if s_object.GetObject() is not None:
+                return False
+            return True
+        return False
+
     def populateMeshes(self):
         selected_mesh_id = self.state.get("selected_mesh_id") or self.meshCombo.currentData()
         self.meshCombo.blockSignals(True)
@@ -791,26 +828,21 @@ class OOFEMMainWidget(QtWidgets.QWidget):
         try:
             smesh_comp = self.study.FindComponent("SMESH")
             if smesh_comp is not None:
-                child_iterator = self.study.NewChildIterator(smesh_comp)
-                try:
-                    # SALOMEDS defaults to direct children. Meshes can live in
-                    # user-created study folders, so request the complete
-                    # component subtree when the iterator supports it.
-                    child_iterator.InitEx(True)
-                except AttributeError:
-                    # Lightweight test doubles and very old SALOME clients may
-                    # only expose the direct-child iterator API.
-                    pass
-                while child_iterator.More():
-                    s_object = child_iterator.Value()
-                    mesh_object = s_object.GetObject()
-                    if (
-                        mesh_object is not None
-                        and hasattr(mesh_object, "GetGroups")
-                        and hasattr(mesh_object, "GetNodesId")
-                    ):
-                        self.meshCombo.addItem(s_object.GetName(), s_object.GetID())
-                    child_iterator.Next()
+                names = self._collectMeshes(smesh_comp)
+                if not names and self._smeshSubtreeIsDormant(smesh_comp):
+                    # The study tree lists meshes by name but every GetObject()
+                    # came back None: this HDF study's SMESH component has not
+                    # been loaded yet, so there are no live CORBA objects behind
+                    # those names.  Load it and look again -- otherwise the mesh
+                    # list stays empty until the user happens to click Mesh or
+                    # Geometry in the object browser, which is what activates
+                    # SMESH by accident.
+                    from OOFEMSalomePlugin.OOFEMSalome import load_smesh_component
+
+                    load_smesh_component(self.study)
+                    names = self._collectMeshes(smesh_comp)
+                for name, entry in names:
+                    self.meshCombo.addItem(name, entry)
         except Exception:
             # CORBA can report UNKNOWN while a study or SMESH component is being
             # created. Keep the module open and let Refresh retry the lookup.

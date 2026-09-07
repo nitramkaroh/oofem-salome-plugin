@@ -215,6 +215,47 @@ class MainWidgetWorkflowTests(unittest.TestCase):
             self.widget.state["element_mapping"].get("Quadrangle"), "PlaneStress2d"
         )
 
+    def test_populate_all_loads_dormant_smesh_component_of_an_opened_study(self):
+        """A just-opened HDF study lists its meshes but has no live objects yet.
+
+        SALOME only materialises the CORBA objects behind the SMESH branch once
+        the component is loaded, so GetObject() returns None for every mesh
+        until then.  Without the retry the combo stays empty and the mesh
+        appears only when the user clicks Mesh or Geometry, which activates
+        SMESH by accident.
+        """
+        mesh = FakeMesh()
+        dormant = FakeStudyObject("0:1:2", "Samal", None)
+        study = FakeStudy([dormant])
+
+        def wake_up(_study):
+            dormant._obj = mesh
+            return study._smesh_component
+
+        with unittest.mock.patch(
+            "OOFEMSalomePlugin.OOFEMSalome.load_smesh_component", wake_up
+        ) as loader:
+            self.widget.populateAll(study=study)
+
+        self.assertEqual(self.widget.meshCombo.count(), 1)
+        self.assertEqual(self.widget.meshCombo.currentText(), "Samal")
+        self.assertEqual(self.widget.meshCombo.currentData(), "0:1:2")
+
+    def test_populate_all_does_not_reload_smesh_when_meshes_are_already_live(self):
+        calls = []
+
+        def loader(study):
+            calls.append(study)
+            return None
+
+        with unittest.mock.patch(
+            "OOFEMSalomePlugin.OOFEMSalome.load_smesh_component", loader
+        ):
+            self.widget.populateAll(study=self.study)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(self.widget.meshCombo.count(), 1)
+
     def test_populate_all_discovers_mesh_inside_study_folder(self):
         folder = FakeStudyObject("0:1:10", "Meshes", None)
         nested_mesh = FakeMesh()

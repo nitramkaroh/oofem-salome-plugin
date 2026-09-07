@@ -354,6 +354,18 @@ class OOFEMModule:
         main_window = None
         try:
             study = getattr(self.context, "study", None)
+            if study is None:
+                # SALOME's Tools>Plugins context carries no "study" attribute at
+                # all, and the module callback is not guaranteed to supply one
+                # either.  Resolve it the way every other callback does: without
+                # this, load_smesh_component() below is handed None and returns
+                # silently, while populateAll() goes on to fall back to
+                # salome.myStudy -- so the meshes get enumerated from a study
+                # whose SMESH component was never loaded, and every one of them
+                # reads back as None.  That is the "mesh only appears after I
+                # click on Mesh or Geometry" symptom: clicking those activates
+                # SMESH, which is what should have happened here.
+                study = self._runtime_study()
             session = self._select_study(study)
             if not session.state and study is not None:
                 persisted = OOFEMState.load(study)
@@ -365,7 +377,11 @@ class OOFEMModule:
             from OOFEMSalomePlugin.OOFEMSalome import load_smesh_component
 
             try:
-                load_smesh_component(study)
+                if load_smesh_component(study) is None:
+                    _logger.info(
+                        "No SMESH component to load for this study; "
+                        "meshes will appear once one exists"
+                    )
             except Exception:
                 # A new study legitimately has no SMESH component. A stale or
                 # temporarily unavailable CORBA proxy must not prevent module
