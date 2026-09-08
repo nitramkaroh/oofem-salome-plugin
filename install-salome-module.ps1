@@ -50,11 +50,14 @@ Copy-Item -LiteralPath (Join-Path $SourceModule "oofem-logo.png") -Destination $
 # 4. Copy launcher extra.env.d hook
 Copy-Item -LiteralPath (Join-Path $SourceModule "oofem_env.py") -Destination (Join-Path $ExtraEnvRoot "oofem.py") -Force
 
-# 5. Locate Python executable to run registrar
+# 5. Locate Python executable to run registrar.
+# The registrar needs nothing but the standard library and the oofem_preferences
+# module sitting beside it, so any Python 3 will do -- but it must be a real one.
+# A bare "python" on Windows commonly resolves to the Microsoft Store alias stub,
+# which prints "Python was not found" and exits without doing anything.
 $PythonCandidates = @(
     (Join-Path $SalomeDir "W64\Python\python3.exe"),
-    (Join-Path $SalomeDir "W64\Python\python.exe"),
-    "python"
+    (Join-Path $SalomeDir "W64\Python\python.exe")
 )
 
 $PythonExe = $null
@@ -64,13 +67,54 @@ foreach ($Candidate in $PythonCandidates) {
         break
     }
 }
+
+# Those two paths are only where some builds keep it. Rather than guess at more
+# layouts, look for it: a SALOME installation always ships a Python somewhere.
 if (-not $PythonExe) {
-    $PythonExe = "python"
+    $Found = Get-ChildItem -LiteralPath $SalomeDir -Recurse -Filter "python*.exe" `
+        -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^python(3[\d.]*)?\.exe$' } |
+        Select-Object -First 1
+    if ($Found) {
+        $PythonExe = $Found.FullName
+        Write-Host "Found SALOME's Python: $PythonExe"
+    }
+}
+
+# Last resort: PATH, but only if it is not the Store stub. The stub reports a
+# zero-byte-ish executable under WindowsApps; a genuine interpreter answers.
+if (-not $PythonExe) {
+    $OnPath = Get-Command python -ErrorAction SilentlyContinue
+    if ($OnPath -and $OnPath.Source -notlike "*\WindowsApps\*") {
+        $PythonExe = $OnPath.Source
+    }
 }
 
 $Registrar = Join-Path $PythonRoot "register_oofem_user_config.py"
+
+if (-not $PythonExe) {
+    Write-Host ""
+    Write-Host "Module files are installed, but the per-user GUI registration was NOT done." -ForegroundColor Yellow
+    Write-Host "No Python interpreter was found. That step writes OOFEM's module name," -ForegroundColor Yellow
+    Write-Host "icon and library into SalomeApprc; without it OOFEM may be missing from" -ForegroundColor Yellow
+    Write-Host "the module dropdown. Finish it by hand from SALOME's own shell:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    $SalomeDir\run_salome_shell.bat"
+    Write-Host "    python `"$Registrar`" --salome `"$SalomeDir`""
+    Write-Host ""
+    throw "No Python interpreter available for the registration step."
+}
+
 Write-Host "Registering OOFEM in per-user SALOME GUI configuration..."
 & $PythonExe "$Registrar" --salome "$SalomeDir"
+if ($LASTEXITCODE -ne 0) {
+    # Never fall through to "Installation Complete" after this fails: the copies
+    # alone leave a module SALOME may not list, and a green success message sends
+    # the user looking for the fault in the wrong place.
+    throw ("Registration failed: {0} exited with {1}. " -f $PythonExe, $LASTEXITCODE) +
+          "The module files are in place; rerun the registrar by hand from " +
+          "$SalomeDir\run_salome_shell.bat"
+}
 
 # 6. Global resource registration in SalomeApp.xml
 $GlobalXmlCandidates = @(
