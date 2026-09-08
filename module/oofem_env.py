@@ -27,4 +27,8 @@ def init(context, root_dir):
     context.addToPythonPath(python_root)
     modules = _modules_with_oofem_first(os.environ.get("SALOME_MODULES", ""))
     context.setVariable("SALOME_MODULES", modules, overwrite=True)
-    context.addToVariable("SalomeAppConfig", resource_root, separator=":")
+    # os.pathsep, not ":" -- SALOME's launchConfigureParser splits
+    # SalomeAppConfig on the platform separator, so a colon on Windows glues
+    # this path onto the previous entry and the module's resources are never
+    # found.
+    context.addToVariable("SalomeAppConfig", resource_root, separator=os.pathsep)

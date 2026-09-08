@@ -116,7 +116,13 @@ if ($LASTEXITCODE -ne 0) {
           "$SalomeDir\run_salome_shell.bat"
 }
 
-# 6. Global resource registration in SalomeApp.xml
+# 6. Global resource registration in SalomeApp.xml.
+# Only on request. This edits a file shared by every SALOME module, and the
+# per-user registration plus the extra.env.d hook are enough on builds that
+# read them; -LegacyGlobalRegistration exists for the ones that do not. The
+# switch was declared but never tested, so this ran unconditionally -- against
+# what the README promises and what the .sh installer does.
+if ($LegacyGlobalRegistration) {
 $GlobalXmlCandidates = @(
     (Join-Path $SalomeDir "W64\SALOME\share\salome\resources\salome\SalomeApp.xml"),
     (Join-Path $SalomeDir "INSTALL\SALOME\share\salome\resources\salome\SalomeApp.xml")
@@ -136,6 +142,9 @@ foreach ($GlobalXml in $GlobalXmlCandidates) {
         }
         break
     }
+}
+} else {
+    Write-Host "Global SALOME resource left unchanged (pass -LegacyGlobalRegistration to edit it)"
 }
 
 Write-Host ""

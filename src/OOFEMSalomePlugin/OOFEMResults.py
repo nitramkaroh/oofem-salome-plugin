@@ -191,25 +191,31 @@ def read_vtu_fields(path, run_directory=None):
     fields = {"point": [], "cell": []}
     section = None
     try:
-        for event, element in ET.iterparse(path, events=("start", "end")):
-            tag = element.tag.rsplit("}", 1)[-1]
-            if event == "start" and tag == "PointData":
-                section = "point"
-            elif event == "start" and tag == "CellData":
-                section = "cell"
-            elif event == "start" and tag == "DataArray" and section:
-                name = (element.get("Name") or "").strip()
-                if name and name not in fields[section]:
-                    fields[section].append(name)
-            elif event == "end" and tag in ("PointData", "CellData"):
-                section = None
-            elif event == "start" and tag in ("Points", "Cells"):
-                # VTK XML declares result fields before large mesh arrays.
-                break
-            elif event == "end" and tag == "Piece":
-                break
-            if event == "end":
-                element.clear()
+        # Handed a path, iterparse closes the file only once the iterator is
+        # exhausted -- and this loop deliberately breaks out early, as soon as
+        # the field names are known. The dangling handle keeps the .vtu locked
+        # on Windows, where deleting a run then fails with WinError 32. Owning
+        # the handle here closes it however the loop ends.
+        with open(path, "rb") as handle:
+            for event, element in ET.iterparse(handle, events=("start", "end")):
+                tag = element.tag.rsplit("}", 1)[-1]
+                if event == "start" and tag == "PointData":
+                    section = "point"
+                elif event == "start" and tag == "CellData":
+                    section = "cell"
+                elif event == "start" and tag == "DataArray" and section:
+                    name = (element.get("Name") or "").strip()
+                    if name and name not in fields[section]:
+                        fields[section].append(name)
+                elif event == "end" and tag in ("PointData", "CellData"):
+                    section = None
+                elif event == "start" and tag in ("Points", "Cells"):
+                    # VTK XML declares result fields before large mesh arrays.
+                    break
+                elif event == "end" and tag == "Piece":
+                    break
+                if event == "end":
+                    element.clear()
     except (ET.ParseError, OSError):
         return {"point": [], "cell": []}
     return fields
