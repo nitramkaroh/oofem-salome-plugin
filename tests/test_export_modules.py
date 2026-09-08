@@ -27,6 +27,15 @@ ENTITY_ITEMS = [
     EnumItem("Entity_Quad_Quadrangle", 9),
 ]
 
+# Stubs installed here leak into every test file that runs after this one, so
+# note what we added and take it back in tearDownModule().  Without that,
+# test_module_sessions.py imports this module's placeholder OOFEMModule instead
+# of the real one and every one of its tests dies on
+# "module OOFEMSalomePlugin.OOFEMModule has no attribute OOFEMModule" -- but
+# only when the two files run in the same session, which is why the file passes
+# on its own.
+_INSTALLED_STUBS = []
+
 if "SMESH" not in sys.modules:
     fake_smesh = types.ModuleType("SMESH")
     fake_smesh.NODE = 0
@@ -35,11 +44,13 @@ if "SMESH" not in sys.modules:
     fake_smesh.VOLUME = 3
     fake_smesh.EntityType = types.SimpleNamespace(_items=ENTITY_ITEMS)
     sys.modules["SMESH"] = fake_smesh
+    _INSTALLED_STUBS.append("SMESH")
 
 if "OOFEMSalomePlugin.OOFEMModule" not in sys.modules:
     fake_module = types.ModuleType("OOFEMSalomePlugin.OOFEMModule")
     fake_module.getModule = lambda: None
     sys.modules["OOFEMSalomePlugin.OOFEMModule"] = fake_module
+    _INSTALLED_STUBS.append("OOFEMSalomePlugin.OOFEMModule")
 
 from OOFEMSalomePlugin.OOFEMConfig import (
     load_export_variable_catalog,
@@ -59,6 +70,15 @@ from OOFEMSalomePlugin.OOFEMProject import (
     new_project_state,
     migrate_project_state,
 )
+
+# The stubs above exist only so the imports in this block can run.  They are
+# removed immediately, not in tearDownModule(), because pytest IMPORTS every
+# test file during collection: test_module_sessions.py binds
+# OOFEMSalomePlugin.OOFEMModule at its own import time, so a stub still present
+# then is what it gets for the rest of the session, and all of its tests fail
+# with "has no attribute OOFEMModule". A teardown would run long after that.
+for _name in _INSTALLED_STUBS:
+    sys.modules.pop(_name, None)
 
 
 class ExportModulesCatalogTests(unittest.TestCase):

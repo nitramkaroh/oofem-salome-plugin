@@ -308,31 +308,38 @@ class MainWidgetWorkflowTests(unittest.TestCase):
         density_item.setText("")
         self.assertNotIn("d", self.widget.state["materials"][0]["params"])
 
-    def _add_bc(self, oofem_type, group, dof, val):
+    def _add_bc(self, oofem_type, group, params):
         self.widget.state["bcs"].append(
             {
                 "id": "bc-{}".format(len(self.widget.state["bcs"]) + 1),
                 "name": "bc",
                 "oofem_type": oofem_type,
                 "assigned_group": group,
-                "params": {"dof": dof, "val": val},
+                "params": dict(params),
             }
         )
         self.widget.populateBCs()
 
     def test_bc_property_edit_rejects_invalid_int_without_saving(self):
-        self._add_bc("Displacement", "BC_FIXED", 1, 0.0)
+        # "Displacement" with a scalar dof/val pair is not a template any more:
+        # a prescribed condition is "BoundaryCondition" with the list-valued
+        # dofs/values. Naming a type that OOFEMBCs.json does not carry makes
+        # populateBCDetails return an empty table, so the test used to die on
+        # item(0, 1) being None rather than on the behaviour it is about.
+        self._add_bc(
+            "BoundaryCondition", "BC_FIXED", {"dofs": [1], "values": [0.0]}
+        )
         self.widget.bcTable.selectRow(0)
 
         dof_item = self.widget.bcPropsTable.item(0, 1)
         dof_item.setText("not-a-number")
-        self.assertEqual(self.widget.state["bcs"][0]["params"]["dof"], 1)
+        self.assertEqual(self.widget.state["bcs"][0]["params"]["dofs"], [1])
         # The rejected text must not linger in the cell as if it had been
         # applied: it should be reverted to the last known-good value.
         self.assertEqual(dof_item.text(), "1")
 
         dof_item.setText("2")
-        self.assertEqual(self.widget.state["bcs"][0]["params"]["dof"], 2)
+        self.assertEqual(self.widget.state["bcs"][0]["params"]["dofs"], [2])
 
     def test_material_property_edit_rejects_non_finite_value_and_reverts_cell(self):
         self._add_sheet_material()
@@ -406,8 +413,12 @@ class MainWidgetWorkflowTests(unittest.TestCase):
 
     def test_validate_model_reports_domain_and_counts_for_configured_mesh(self):
         self._add_sheet_material()
-        self._add_bc("Displacement", "BC_FIXED", 1, 0.0)
-        self._add_bc("SurfaceLoad", "LOAD_EDGE", 1, 1.0)
+        self._add_bc(
+            "BoundaryCondition", "BC_FIXED", {"dofs": [1], "values": [0.0]}
+        )
+        self._add_bc(
+            "SurfaceLoad", "LOAD_EDGE", {"dofs": [1], "components": [1.0]}
+        )
 
         summary = self.widget.validateModel()
 
