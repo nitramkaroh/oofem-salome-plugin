@@ -25,6 +25,19 @@ $PythonRoot = Join-Path $ModuleRoot "bin\salome"
 $ResourceRoot = Join-Path $ModuleRoot "share\salome\resources\oofem"
 $ExtraEnvRoot = Join-Path $SalomeDir "extra.env.d"
 
+# A leftover Tools > Plugins copy silently defeats everything below:
+# salome_pluginsmanager puts its directory at the FRONT of sys.path, so the old
+# copy is imported instead of the one being installed here.
+$ConfigHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME ".config" }
+$SalomeConfigDir = Join-Path $ConfigHome "salome"
+$LegacyPluginDir = Join-Path $SalomeConfigDir "Plugins\OOFEMSalomePlugin"
+if (Test-Path -LiteralPath $LegacyPluginDir) {
+    Write-Host "WARNING: a legacy Tools > Plugins copy is present:" -ForegroundColor Yellow
+    Write-Host "  $LegacyPluginDir" -ForegroundColor Yellow
+    Write-Host "It is imported before the native module and will shadow it. Remove it with:" -ForegroundColor Yellow
+    Write-Host "  .\install.ps1 -Uninstall" -ForegroundColor Yellow
+}
+
 Write-Host "Installing OOFEM module files into $ModuleRoot..."
 
 # 1. Ensure target directories exist
@@ -114,6 +127,35 @@ if ($LASTEXITCODE -ne 0) {
     throw ("Registration failed: {0} exited with {1}. " -f $PythonExe, $LASTEXITCODE) +
           "The module files are in place; rerun the registrar by hand from " +
           "$SalomeDir\run_salome_shell.bat"
+}
+
+# Trust the file, not the exit code. SUIT_ResourceMgr reads
+# SalomeApp.xml.<version> on Windows and SalomeApprc.<version> elsewhere, and
+# a machine carrying both can have OOFEM written into the one the GUI never
+# opens -- the module is then simply absent from the selector, with nothing
+# reported anywhere. Name the file, so the next person does not have to guess.
+$WindowsConfigs = @(Get-ChildItem -LiteralPath $SalomeConfigDir -Filter "SalomeApp.xml.*" `
+    -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*.before-oofem" })
+$PosixConfigs = @(Get-ChildItem -LiteralPath $SalomeConfigDir -Filter "SalomeApprc.*" `
+    -File -ErrorAction SilentlyContinue)
+$RegisteredIn = @()
+foreach ($Candidate in ($WindowsConfigs + $PosixConfigs)) {
+    if ((Get-Content -LiteralPath $Candidate.FullName -Raw) -match 'name="OOFEM"') {
+        $RegisteredIn += $Candidate
+    }
+}
+if ($RegisteredIn.Count -eq 0) {
+    throw "OOFEM is not registered in any per-user resource file under $SalomeConfigDir. " +
+          "Rerun: `"$PythonExe`" `"$Registrar`" --salome `"$SalomeDir`""
+}
+if (-not ($RegisteredIn | Where-Object { $_.Name -like "SalomeApp.xml.*" })) {
+    Write-Host ""
+    Write-Host "WARNING: OOFEM is registered only in $($RegisteredIn[0].Name)." -ForegroundColor Yellow
+    Write-Host "Windows SALOME reads SalomeApp.xml.<version>, so the module will be" -ForegroundColor Yellow
+    Write-Host "missing from the selector. Rerun the registrar with a build of this" -ForegroundColor Yellow
+    Write-Host "installer that picks the name by platform." -ForegroundColor Yellow
+} else {
+    Write-Host "Registration verified in $(($RegisteredIn | ForEach-Object { $_.Name }) -join ', ')"
 }
 
 # 6. Global resource registration in SalomeApp.xml.

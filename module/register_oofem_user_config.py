@@ -57,6 +57,23 @@ def _salome_version(salome_dir: pathlib.Path) -> str:
     raise RuntimeError("Cannot determine the SALOME GUI version")
 
 
+def _user_config_names(version: str) -> tuple[str, ...]:
+    """SALOME's own names for the per-user resource file, correct one first.
+
+    SUIT_ResourceMgr picks the name by platform: ``SalomeApp.xml.<version>`` on
+    Windows, ``SalomeApprc.<version>`` elsewhere. Preferring the wrong one is
+    not cosmetic. A machine that has both -- a file carried over from another
+    system, or left by an earlier run of this script -- gets OOFEM written into
+    the one its GUI never reads, and the module is then missing from the module
+    selector with no error reported anywhere at all.
+    """
+    windows_name = f"SalomeApp.xml.{version}"
+    posix_name = f"SalomeApprc.{version}"
+    if os.name == "nt":
+        return (windows_name, posix_name)
+    return (posix_name, windows_name)
+
+
 def _default_config_path(salome_dir: pathlib.Path) -> pathlib.Path:
     config_home = os.environ.get("XDG_CONFIG_HOME")
     if config_home:
@@ -65,11 +82,11 @@ def _default_config_path(salome_dir: pathlib.Path) -> pathlib.Path:
         root = pathlib.Path.home() / ".config"
     salome_config_dir = root / "salome"
     version = _salome_version(salome_dir)
-    for candidate_name in (f"SalomeApprc.{version}", f"SalomeApp.xml.{version}"):
+    for candidate_name in _user_config_names(version):
         candidate = salome_config_dir / candidate_name
         if candidate.exists():
             return candidate
-    return salome_config_dir / f"SalomeApprc.{version}"
+    return salome_config_dir / _user_config_names(version)[0]
 
 
 def _new_document():

@@ -213,3 +213,55 @@ class SalomeCMakeManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserConfigNameTests(unittest.TestCase):
+    """SALOME's per-user resource file is named differently per platform.
+
+    SUIT_ResourceMgr reads SalomeApp.xml.<version> on Windows and
+    SalomeApprc.<version> everywhere else. Registering into the wrong one is
+    silent: the file is written, the script exits zero, and the module is simply
+    absent from SALOME's module selector.
+    """
+
+    def setUp(self):
+        import importlib.util
+        import os
+        import sys
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        module_dir = os.path.join(root, "module")
+        # oofem_preferences sits beside the registrar and is imported by name
+        self._saved_path = list(sys.path)
+        sys.path.insert(0, module_dir)
+        self.addCleanup(lambda: sys.path.__setitem__(slice(None), self._saved_path))
+        spec = importlib.util.spec_from_file_location(
+            "oofem_register_under_test",
+            os.path.join(module_dir, "register_oofem_user_config.py"),
+        )
+        self.registrar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.registrar)
+
+    def _names(self, os_name):
+        import os
+
+        saved = os.name
+        os.name = os_name
+        try:
+            return self.registrar._user_config_names("9.16.0")
+        finally:
+            os.name = saved
+
+    def test_windows_prefers_the_xml_name(self):
+        self.assertEqual(self._names("nt")[0], "SalomeApp.xml.9.16.0")
+
+    def test_posix_prefers_the_rc_name(self):
+        self.assertEqual(self._names("posix")[0], "SalomeApprc.9.16.0")
+
+    def test_both_names_are_offered_on_either_platform(self):
+        for os_name in ("nt", "posix"):
+            self.assertEqual(
+                sorted(self._names(os_name)),
+                ["SalomeApp.xml.9.16.0", "SalomeApprc.9.16.0"],
+                os_name,
+            )

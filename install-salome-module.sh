@@ -64,6 +64,20 @@ if [ "$legacy_global_registration" -eq 1 ] && [ ! -f "$salome_app_xml" ]; then
     exit 1
 fi
 
+# A leftover Tools>Plugins copy silently defeats everything below.
+# salome_pluginsmanager puts its directory at the FRONT of sys.path, so an old
+# copy there is imported in place of the one this installer is about to write,
+# and the module then fails or misbehaves in ways that point nowhere near the
+# real cause.  README documents the hazard; say it out loud here too.
+legacy_plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/salome/Plugins/OOFEMSalomePlugin"
+if [ -d "$legacy_plugin_dir" ]; then
+    printf '%s\n' \
+        "WARNING: a legacy Tools > Plugins copy is present:" \
+        "  $legacy_plugin_dir" \
+        "It is imported before the native module and will shadow it. Remove it with:" \
+        "  ./install.sh --uninstall" >&2
+fi
+
 mkdir -p "$python_root" "$resource_root" "$extra_env_root"
 rm -rf -- "$python_root/OOFEMSalomePlugin"
 cp -R -- "$package_source" "$python_root/OOFEMSalomePlugin"
@@ -119,6 +133,23 @@ fi
 
 user_config_registrar="$python_root/register_oofem_user_config.py"
 python3 "$user_config_registrar" --salome "$salome_dir"
+
+# Trust the file, not the exit code.  This step is what puts OOFEM's name, icon
+# and library in front of the GUI's resource manager; when it quietly does
+# nothing the module is simply absent from the selector, with no error anywhere.
+salome_version=$(basename -- "$(ls -d -- "$salome_dir" 2>/dev/null)" | sed 's/^SALOME-//')
+user_config=""
+for candidate in "${XDG_CONFIG_HOME:-$HOME/.config}/salome/SalomeApprc."*; do
+    [ -f "$candidate" ] && user_config="$candidate"
+done
+if [ -n "$user_config" ] && grep -q 'name="OOFEM"' "$user_config"; then
+    :
+else
+    printf 'ERROR: OOFEM is not registered in the per-user GUI resources%s\n' \
+        "${user_config:+ ($user_config)}" >&2
+    printf '%s\n' "Rerun: python3 \"$user_config_registrar\" --salome \"$salome_dir\"" >&2
+    exit 1
+fi
 
 launcher="$salome_dir/salome-oofem"
 {
